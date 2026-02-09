@@ -81,7 +81,7 @@ export const enUS: Translations = {
       "Reasoning, planning and executing, get more accurate results, may take more time",
     ultraMode: "Ultra",
     ultraModeDescription:
-      "Pro mode with subagents enabled, maximum capability for complex tasks",
+      "Pro mode with subagents to divide work; best for complex multi-step tasks",
     searchModels: "Search models...",
     surpriseMe: "Surprise",
     surpriseMePrompt: "Surprise me",
@@ -165,13 +165,6 @@ export const enUS: Translations = {
   conversation: {
     noMessages: "No messages yet",
     startConversation: "Start a conversation to see messages here",
-  },
-
-  // Citations
-  citations: {
-    loadingCitations: "Organizing citations...",
-    loadingCitationsWithCount: (count: number) =>
-      `Organizing ${count} citation${count === 1 ? "" : "s"}...`,
   },
 
   // Chats

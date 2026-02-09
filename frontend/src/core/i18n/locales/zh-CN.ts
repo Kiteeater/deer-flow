@@ -49,7 +49,7 @@ export const zhCN: Translations = {
   welcome: {
     greeting: "你好，欢迎回来！",
     description:
-      "欢迎使用 🦌 DeerFlow，一个完全开源的超级智能体。通过内置和\n自定义的 Skills，DeerFlow 可以帮你搜索网络、分析数据，\n还能为你生成幻灯片、网页等作品，几乎可以做任何事情。",
+      "欢迎使用 🦌 DeerFlow，一个完全开源的超级智能体。通过内置和自定义的 Skills，\nDeerFlow 可以帮你搜索网络、分析数据，还能为你生成幻灯片、\n图片、视频、播客及网页等，几乎可以做任何事情。",
 
     createYourOwnSkill: "创建你自己的 Agent SKill",
     createYourOwnSkillDescription:
@@ -75,11 +75,11 @@ export const zhCN: Translations = {
     flashModeDescription: "快速且高效的完成任务，但可能不够精准",
     reasoningMode: "思考",
     reasoningModeDescription: "思考后再行动，在时间与准确性之间取得平衡",
-    proMode: "专业",
+    proMode: "Pro",
     proModeDescription: "思考、计划再执行，获得更精准的结果，可能需要更多时间",
-    ultraMode: "超级",
+    ultraMode: "Ultra",
     ultraModeDescription:
-      "专业模式加子代理，适用于复杂的多步骤任务，功能最强大",
+      "继承自 Pro 模式，可调用子代理分工协作，适合复杂多步骤任务，能力最强",
     searchModels: "搜索模型...",
     surpriseMe: "小惊喜",
     surpriseMePrompt: "给我一个小惊喜吧",
@@ -162,12 +162,6 @@ export const zhCN: Translations = {
   conversation: {
     noMessages: "还没有消息",
     startConversation: "开始新的对话以查看消息",
-  },
-
-  // Citations
-  citations: {
-    loadingCitations: "正在整理引用...",
-    loadingCitationsWithCount: (count: number) => `正在整理 ${count} 个引用...`,
   },
 
   // Chats

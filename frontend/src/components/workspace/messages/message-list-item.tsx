@@ -5,10 +5,6 @@ import { memo, useMemo } from "react";
 import rehypeKatex from "rehype-katex";
 
 import {
-  CitationLink,
-  CitationsLoadingIndicator,
-} from "@/components/ai-elements/inline-citation";
-import {
   Message as AIElementMessage,
   MessageContent as AIElementMessageContent,
   MessageResponse as AIElementMessageResponse,
@@ -17,27 +13,17 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { resolveArtifactURL } from "@/core/artifacts/utils";
 import {
-  type Citation,
-  buildCitationMap,
-  isCitationsBlockIncomplete,
-  parseCitations,
-  removeAllCitations,
-} from "@/core/citations";
-import {
   extractContentFromMessage,
   extractReasoningContentFromMessage,
   parseUploadedFiles,
   type UploadedFile,
 } from "@/core/messages/utils";
 import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
-import { humanMessagePlugins, streamdownPlugins } from "@/core/streamdown";
-import {
-  cn,
-  externalLinkClass,
-  externalLinkClassNoUnderline,
-} from "@/lib/utils";
+import { humanMessagePlugins } from "@/core/streamdown";
+import { cn } from "@/lib/utils";
 
 import { CopyButton } from "../copy-button";
+import { MarkdownContent } from "./markdown-content";
 
 export function MessageListItem({
   className,
@@ -67,58 +53,15 @@ export function MessageListItem({
       >
         <div className="flex gap-1">
           <CopyButton
-            clipboardData={removeAllCitations(
+            clipboardData={
               extractContentFromMessage(message) ??
               extractReasoningContentFromMessage(message) ??
               ""
-            )}
+            }
           />
         </div>
       </MessageToolbar>
     </AIElementMessage>
-  );
-}
-
-/**
- * Custom link component that handles citations and external links
- * Only links in citationMap are rendered as CitationLink badges
- * Other links (project URLs, regular links) are rendered as plain links
- * During citation loading (streaming), non-citation links are rendered without underline so they match final citation style (p3)
- */
-function MessageLink({
-  href,
-  children,
-  citationMap,
-  isHuman,
-  isLoadingCitations,
-}: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
-  citationMap: Map<string, Citation>;
-  isHuman: boolean;
-  isLoadingCitations?: boolean;
-}) {
-  if (!href) return <span>{children}</span>;
-
-  const citation = citationMap.get(href);
-
-  // Only render as CitationLink badge if it's a citation (in citationMap) and not human message
-  if (citation && !isHuman) {
-    return (
-      <CitationLink citation={citation} href={href}>
-        {children}
-      </CitationLink>
-    );
-  }
-
-  const noUnderline = !isHuman && isLoadingCitations;
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={noUnderline ? externalLinkClassNoUnderline : externalLinkClass}
-    >
-      {children}
-    </a>
   );
 }
 
@@ -165,85 +108,36 @@ function MessageContent_({
   const isHuman = message.type === "human";
   const { thread_id } = useParams<{ thread_id: string }>();
 
-  // Extract and parse citations and uploaded files from message content
-  const { citations, cleanContent, uploadedFiles, isLoadingCitations } =
-    useMemo(() => {
-      const reasoningContent = extractReasoningContentFromMessage(message);
-      const rawContent = extractContentFromMessage(message);
+  const rawContent = extractContentFromMessage(message);
+  const reasoningContent = extractReasoningContentFromMessage(message);
+  const { contentToParse, uploadedFiles } = useMemo(() => {
+    if (!isLoading && reasoningContent && !rawContent) {
+      return { contentToParse: reasoningContent, uploadedFiles: [] as UploadedFile[] };
+    }
+    if (isHuman && rawContent) {
+      const { files, cleanContent: contentWithoutFiles } =
+        parseUploadedFiles(rawContent);
+      return { contentToParse: contentWithoutFiles, uploadedFiles: files };
+    }
+    return {
+      contentToParse: rawContent ?? "",
+      uploadedFiles: [] as UploadedFile[],
+    };
+  }, [isLoading, rawContent, reasoningContent, isHuman]);
 
-      // When only reasoning content exists (no main content), also parse citations
-      if (!isLoading && reasoningContent && !rawContent) {
-        const { citations, cleanContent } = parseCitations(reasoningContent);
-        return {
-          citations,
-          cleanContent,
-          uploadedFiles: [],
-          isLoadingCitations: false,
-        };
-      }
-
-      // For human messages, parse uploaded files first
-      if (isHuman && rawContent) {
-        const { files, cleanContent: contentWithoutFiles } =
-          parseUploadedFiles(rawContent);
-        const { citations, cleanContent: finalContent } =
-          parseCitations(contentWithoutFiles);
-        return {
-          citations,
-          cleanContent: finalContent,
-          uploadedFiles: files,
-          isLoadingCitations: false,
-        };
-      }
-
-      const { citations, cleanContent } = parseCitations(rawContent ?? "");
-      const isLoadingCitations =
-        isLoading && isCitationsBlockIncomplete(rawContent ?? "");
-
-      return { citations, cleanContent, uploadedFiles: [], isLoadingCitations };
-    }, [isLoading, message, isHuman]);
-
-  const citationMap = useMemo(() => buildCitationMap(citations), [citations]);
-
-  // Shared markdown components
-  const markdownComponents = useMemo(() => ({
-    a: (props: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
-      <MessageLink
-        {...props}
-        citationMap={citationMap}
-        isHuman={isHuman}
-        isLoadingCitations={isLoadingCitations}
-      />
-    ),
-    img: (props: React.ImgHTMLAttributes<HTMLImageElement>) => (
-      <MessageImage {...props} threadId={thread_id} maxWidth={isHuman ? "full" : "90%"} />
-    ),
-  }), [citationMap, thread_id, isHuman, isLoadingCitations]);
-
-  // Render message response
-  // Human messages use humanMessagePlugins (no autolink) to prevent URL bleeding into adjacent text
-  const messageResponse = cleanContent ? (
-    <AIElementMessageResponse
-      remarkPlugins={isHuman ? humanMessagePlugins.remarkPlugins : streamdownPlugins.remarkPlugins}
-      rehypePlugins={isHuman ? humanMessagePlugins.rehypePlugins : [...rehypePlugins, [rehypeKatex, { output: "html" }]]}
-      components={markdownComponents}
-    >
-      {cleanContent}
-    </AIElementMessageResponse>
-  ) : null;
-
-  // Uploaded files list
   const filesList = uploadedFiles.length > 0 && thread_id ? (
     <UploadedFilesList files={uploadedFiles} threadId={thread_id} />
   ) : null;
 
-  // Citations loading indicator
-  const citationsLoadingIndicator = isLoadingCitations ? (
-    <CitationsLoadingIndicator citations={citations} className="my-3" />
-  ) : null;
-
-  // Human messages with uploaded files: render outside bubble
-  if (isHuman && uploadedFiles.length > 0) {
+  if (isHuman) {
+    const messageResponse = contentToParse ? (
+      <AIElementMessageResponse
+        remarkPlugins={humanMessagePlugins.remarkPlugins}
+        rehypePlugins={humanMessagePlugins.rehypePlugins}
+      >
+        {contentToParse}
+      </AIElementMessageResponse>
+    ) : null;
     return (
       <div className={cn("ml-auto flex flex-col gap-2", className)}>
         {filesList}
@@ -256,12 +150,23 @@ function MessageContent_({
     );
   }
 
-  // Default rendering
   return (
     <AIElementMessageContent className={className}>
       {filesList}
-      {messageResponse}
-      {citationsLoadingIndicator}
+      <MarkdownContent
+        content={contentToParse}
+        isLoading={isLoading}
+        rehypePlugins={[...rehypePlugins, [rehypeKatex, { output: "html" }]]}
+        className="my-3"
+        isHuman={false}
+        img={(props) => (
+          <MessageImage
+            {...props}
+            threadId={thread_id}
+            maxWidth="90%"
+          />
+        )}
+      />
     </AIElementMessageContent>
   );
 }

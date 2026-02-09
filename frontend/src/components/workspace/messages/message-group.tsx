@@ -22,10 +22,8 @@ import {
   ChainOfThoughtStep,
 } from "@/components/ai-elements/chain-of-thought";
 import { CodeBlock } from "@/components/ai-elements/code-block";
-import { CitationsLoadingIndicator } from "@/components/ai-elements/inline-citation";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
-import { parseCitations } from "@/core/citations";
 import { useI18n } from "@/core/i18n/hooks";
 import {
   extractReasoningContentFromMessage,
@@ -41,7 +39,7 @@ import { useArtifacts } from "../artifacts";
 import { FlipDisplay } from "../flip-display";
 import { Tooltip } from "../tooltip";
 
-import { useThread } from "./context";
+import { MarkdownContent } from "./markdown-content";
 
 export function MessageGroup({
   className,
@@ -120,12 +118,11 @@ export function MessageGroup({
                 <ChainOfThoughtStep
                   key={step.id}
                   label={
-                    <MessageResponse
-                      remarkPlugins={streamdownPlugins.remarkPlugins}
+                    <MarkdownContent
+                      content={step.reasoning ?? ""}
+                      isLoading={isLoading}
                       rehypePlugins={rehypePlugins}
-                    >
-                      {parseCitations(step.reasoning ?? "").cleanContent}
-                    </MessageResponse>
+                    />
                   }
                 ></ChainOfThoughtStep>
               ) : (
@@ -173,15 +170,11 @@ export function MessageGroup({
               <ChainOfThoughtStep
                 key={lastReasoningStep.id}
                 label={
-                  <MessageResponse
-                    remarkPlugins={streamdownPlugins.remarkPlugins}
+                  <MarkdownContent
+                    content={lastReasoningStep.reasoning ?? ""}
+                    isLoading={isLoading}
                     rehypePlugins={rehypePlugins}
-                  >
-                    {
-                      parseCitations(lastReasoningStep.reasoning ?? "")
-                        .cleanContent
-                    }
-                  </MessageResponse>
+                  />
                 }
               ></ChainOfThoughtStep>
             </ChainOfThoughtContent>
@@ -212,15 +205,6 @@ function ToolCall({
   const { t } = useI18n();
   const { setOpen, autoOpen, autoSelect, selectedArtifact, select } =
     useArtifacts();
-  const { thread } = useThread();
-  const threadIsLoading = thread.isLoading;
-
-  // Move useMemo to top level to comply with React Hooks rules
-  const fileContent = typeof args.content === "string" ? args.content : "";
-  const { citations } = useMemo(
-    () => parseCitations(fileContent),
-    [fileContent],
-  );
 
   if (name === "web_search") {
     let label: React.ReactNode = t.toolCalls.searchForRelatedInfo;
@@ -366,42 +350,27 @@ function ToolCall({
       }, 100);
     }
 
-    // Check if this is a markdown file with citations
-    const isMarkdown =
-      path?.toLowerCase().endsWith(".md") ||
-      path?.toLowerCase().endsWith(".markdown");
-    const hasCitationsBlock = fileContent.includes("<citations>");
-    const showCitationsLoading =
-      isMarkdown && threadIsLoading && hasCitationsBlock && isLast;
-
     return (
-      <>
-        <ChainOfThoughtStep
-          key={id}
-          className="cursor-pointer"
-          label={description}
-          icon={NotebookPenIcon}
-          onClick={() => {
-            select(
-              new URL(
-                `write-file:${path}?message_id=${messageId}&tool_call_id=${id}`,
-              ).toString(),
-            );
-            setOpen(true);
-          }}
-        >
-          {path && (
-            <ChainOfThoughtSearchResult className="cursor-pointer">
-              {path}
-            </ChainOfThoughtSearchResult>
-          )}
-        </ChainOfThoughtStep>
-        {showCitationsLoading && (
-          <div className="mt-2 ml-8">
-            <CitationsLoadingIndicator citations={citations} />
-          </div>
+      <ChainOfThoughtStep
+        key={id}
+        className="cursor-pointer"
+        label={description}
+        icon={NotebookPenIcon}
+        onClick={() => {
+          select(
+            new URL(
+              `write-file:${path}?message_id=${messageId}&tool_call_id=${id}`,
+            ).toString(),
+          );
+          setOpen(true);
+        }}
+      >
+        {path && (
+          <ChainOfThoughtSearchResult className="cursor-pointer">
+            {path}
+          </ChainOfThoughtSearchResult>
         )}
-      </>
+      </ChainOfThoughtStep>
     );
   } else if (name === "bash") {
     const description: string | undefined = (args as { description: string })
