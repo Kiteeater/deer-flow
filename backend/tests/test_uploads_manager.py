@@ -6,9 +6,11 @@ from deerflow.uploads.manager import (
     PathTraversalError,
     claim_unique_filename,
     delete_file_safe,
+    enrich_file_listing,
     list_files_in_dir,
     normalize_filename,
     validate_path_traversal,
+    write_docx_sidecar_manifest,
 )
 
 # ---------------------------------------------------------------------------
@@ -130,6 +132,49 @@ class TestListFilesInDir:
 
 
 # ---------------------------------------------------------------------------
+# enrich_file_listing
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichFileListing:
+    def test_groups_docx_sidecar_images_under_source_file(self, tmp_path):
+        source = tmp_path / "report.docx"
+        source.write_bytes(b"docx")
+        (tmp_path / "report.md").write_text("converted", encoding="utf-8")
+        image1 = tmp_path / "report__image1.png"
+        image1.write_bytes(b"png")
+        image2 = tmp_path / "report__image2.jpeg"
+        image2.write_bytes(b"jpeg")
+        write_docx_sidecar_manifest(source, [image1, image2])
+        (tmp_path / "notes.txt").write_text("note", encoding="utf-8")
+
+        result = list_files_in_dir(tmp_path)
+        enrich_file_listing(result, "thread-1")
+
+        filenames = [f["filename"] for f in result["files"]]
+        assert filenames == ["notes.txt", "report.docx", "report.md"]
+
+        report = next(f for f in result["files"] if f["filename"] == "report.docx")
+        assert [img["filename"] for img in report["extracted_images"]] == [
+            "report__image1.png",
+            "report__image2.jpeg",
+        ]
+        assert report["extracted_images"][0]["virtual_path"] == "/mnt/user-data/uploads/report__image1.png"
+        assert report["extracted_images"][1]["artifact_url"].endswith("/report__image2.jpeg")
+
+    def test_keeps_unmatched_image_files_as_standalone_entries(self, tmp_path):
+        (tmp_path / "report.docx").write_bytes(b"docx")
+        (tmp_path / "report__image1.png").write_bytes(b"png")
+
+        result = list_files_in_dir(tmp_path)
+        enrich_file_listing(result, "thread-1")
+
+        assert [f["filename"] for f in result["files"]] == ["report.docx", "report__image1.png"]
+        report = next(f for f in result["files"] if f["filename"] == "report.docx")
+        assert "extracted_images" not in report
+
+
+# ---------------------------------------------------------------------------
 # delete_file_safe
 # ---------------------------------------------------------------------------
 
@@ -149,3 +194,37 @@ class TestDeleteFileSafe:
     def test_delete_traversal_raises(self, tmp_path):
         with pytest.raises(PathTraversalError, match="traversal"):
             delete_file_safe(tmp_path, "../outside.txt")
+
+    def test_delete_docx_removes_markdown_and_extracted_images(self, tmp_path):
+        source = tmp_path / "report.docx"
+        source.write_bytes(b"docx")
+        markdown = tmp_path / "report.md"
+        markdown.write_text("converted", encoding="utf-8")
+        image1 = tmp_path / "report__image1.png"
+        image1.write_bytes(b"png")
+        image2 = tmp_path / "report__image2.jpeg"
+        image2.write_bytes(b"jpeg")
+        write_docx_sidecar_manifest(source, [image1, image2])
+
+        result = delete_file_safe(tmp_path, "report.docx", convertible_extensions={".docx"})
+
+        assert result["success"] is True
+        assert not source.exists()
+        assert not markdown.exists()
+        assert not image1.exists()
+        assert not image2.exists()
+
+    def test_delete_docx_keeps_untracked_matching_filename_images(self, tmp_path):
+        source = tmp_path / "report.docx"
+        source.write_bytes(b"docx")
+        markdown = tmp_path / "report.md"
+        markdown.write_text("converted", encoding="utf-8")
+        unrelated_image = tmp_path / "report__image1.png"
+        unrelated_image.write_bytes(b"png")
+
+        result = delete_file_safe(tmp_path, "report.docx", convertible_extensions={".docx"})
+
+        assert result["success"] is True
+        assert not source.exists()
+        assert not markdown.exists()
+        assert unrelated_image.exists()

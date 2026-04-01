@@ -43,6 +43,7 @@ from deerflow.models import create_chat_model
 from deerflow.skills.installer import install_skill_from_archive
 from deerflow.uploads.manager import (
     claim_unique_filename,
+    delete_docx_sidecars,
     delete_file_safe,
     enrich_file_listing,
     ensure_uploads_dir,
@@ -50,6 +51,7 @@ from deerflow.uploads.manager import (
     list_files_in_dir,
     upload_artifact_url,
     upload_virtual_path,
+    write_docx_sidecar_manifest,
 )
 
 logger = logging.getLogger(__name__)
@@ -780,7 +782,7 @@ class DeerFlowClient:
             FileNotFoundError: If any file does not exist.
             ValueError: If any supplied path exists but is not a regular file.
         """
-        from deerflow.utils.file_conversion import CONVERTIBLE_EXTENSIONS, convert_file_to_markdown
+        from deerflow.utils.file_conversion import CONVERTIBLE_EXTENSIONS, convert_file_to_markdown, extract_docx_images
 
         # Validate all files upfront to avoid partial uploads.
         resolved_files = []
@@ -816,6 +818,9 @@ class DeerFlowClient:
         def _convert_in_thread(path: Path):
             return asyncio.run(convert_file_to_markdown(path))
 
+        def _extract_images_in_thread(path: Path):
+            return asyncio.run(extract_docx_images(path))
+
         try:
             for src_path, dest_name in resolved_files:
                 dest = uploads_dir / dest_name
@@ -850,6 +855,36 @@ class DeerFlowClient:
                         info["markdown_path"] = str(uploads_dir / md_path.name)
                         info["markdown_virtual_path"] = upload_virtual_path(md_path.name)
                         info["markdown_artifact_url"] = upload_artifact_url(thread_id, md_path.name)
+
+                    if src_path.suffix.lower() == ".docx":
+                        delete_docx_sidecars(dest)
+                        try:
+                            if conversion_pool is not None:
+                                extracted_image_paths = conversion_pool.submit(_extract_images_in_thread, dest).result()
+                            else:
+                                extracted_image_paths = asyncio.run(extract_docx_images(dest))
+                        except Exception:
+                            logger.warning(
+                                "Failed to extract embedded images from %s",
+                                src_path.name,
+                                exc_info=True,
+                            )
+                            extracted_image_paths = []
+
+                        write_docx_sidecar_manifest(dest, extracted_image_paths)
+                        if extracted_image_paths:
+                            info["extracted_images"] = [
+                                {
+                                    "filename": image_path.name,
+                                    "size": str(image_path.stat().st_size),
+                                    "path": str(image_path),
+                                    "virtual_path": upload_virtual_path(image_path.name),
+                                    "artifact_url": upload_artifact_url(thread_id, image_path.name),
+                                    "extension": image_path.suffix,
+                                    "modified": image_path.stat().st_mtime,
+                                }
+                                for image_path in extracted_image_paths
+                            ]
 
                 uploaded_files.append(info)
         finally:

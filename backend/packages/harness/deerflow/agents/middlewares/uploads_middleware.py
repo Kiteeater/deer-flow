@@ -10,8 +10,13 @@ from langchain_core.messages import HumanMessage
 from langgraph.runtime import Runtime
 
 from deerflow.config.paths import Paths, get_paths
+from deerflow.uploads.manager import enrich_file_listing, list_files_in_dir
 
 logger = logging.getLogger(__name__)
+
+_VIEW_IMAGE_GUIDANCE = (
+    "  This .docx includes extracted images. Before answering questions that depend on screenshots, diagrams, flowcharts, or other visual details, use `view_image` on those image paths instead of relying on markdown alone."
+)
 
 
 class UploadsMiddlewareState(AgentState):
@@ -55,10 +60,19 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         lines.append("")
         if new_files:
             for file in new_files:
-                size_kb = file["size"] / 1024
+                size_kb = int(file["size"]) / 1024
                 size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb / 1024:.1f} MB"
                 lines.append(f"- {file['filename']} ({size_str})")
                 lines.append(f"  Path: {file['path']}")
+                if file.get("markdown_file") and file.get("markdown_path"):
+                    lines.append(f"  Converted Markdown: {file['markdown_file']}")
+                    lines.append(f"    Path: {file['markdown_path']}")
+                for image in file.get("extracted_images", []):
+                    lines.append("  Extracted images for vision analysis:")
+                    lines.append(f"  Image: {image['filename']}")
+                    lines.append(f"    Path: {image['path']}")
+                if file.get("extracted_images"):
+                    lines.append(_VIEW_IMAGE_GUIDANCE)
                 lines.append("")
         else:
             lines.append("(empty)")
@@ -67,10 +81,16 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
             lines.append("The following files were uploaded in previous messages and are still available:")
             lines.append("")
             for file in historical_files:
-                size_kb = file["size"] / 1024
+                size_kb = int(file["size"]) / 1024
                 size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb / 1024:.1f} MB"
                 lines.append(f"- {file['filename']} ({size_str})")
                 lines.append(f"  Path: {file['path']}")
+                for image in file.get("extracted_images", []):
+                    lines.append("  Extracted images for vision analysis:")
+                    lines.append(f"  Image: {image['filename']}")
+                    lines.append(f"    Path: {image['path']}")
+                if file.get("extracted_images"):
+                    lines.append(_VIEW_IMAGE_GUIDANCE)
                 lines.append("")
 
         lines.append("You can read these files using the `read_file` tool with the paths shown above.")
@@ -106,15 +126,90 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
                 continue
             if uploads_dir is not None and not (uploads_dir / filename).is_file():
                 continue
-            files.append(
-                {
-                    "filename": filename,
-                    "size": int(f.get("size") or 0),
-                    "path": f"/mnt/user-data/uploads/{filename}",
-                    "extension": Path(filename).suffix,
-                }
-            )
+            file_info = {
+                "filename": filename,
+                "size": int(f.get("size") or 0),
+                "path": f"/mnt/user-data/uploads/{filename}",
+                "extension": Path(filename).suffix,
+            }
+
+            markdown_filename = f.get("markdown_file") or ""
+            if markdown_filename and Path(markdown_filename).name == markdown_filename:
+                if uploads_dir is None or (uploads_dir / markdown_filename).is_file():
+                    file_info["markdown_file"] = markdown_filename
+                    file_info["markdown_path"] = f"/mnt/user-data/uploads/{markdown_filename}"
+
+            extracted_images = []
+            for image in f.get("extracted_images") or []:
+                if not isinstance(image, dict):
+                    continue
+                image_filename = image.get("filename") or ""
+                if not image_filename or Path(image_filename).name != image_filename:
+                    continue
+                if uploads_dir is not None and not (uploads_dir / image_filename).is_file():
+                    continue
+                extracted_images.append(
+                    {
+                        "filename": image_filename,
+                        "size": int(image.get("size") or 0),
+                        "path": f"/mnt/user-data/uploads/{image_filename}",
+                        "extension": Path(image_filename).suffix,
+                        "virtual_path": f"/mnt/user-data/uploads/{image_filename}",
+                        "artifact_url": image.get("artifact_url"),
+                    }
+                )
+            if extracted_images:
+                file_info["extracted_images"] = extracted_images
+
+            files.append(file_info)
         return files if files else None
+
+    def _collect_related_new_filenames(self, new_files: list[dict]) -> set[str]:
+        """Collect filenames that should be excluded from historical listings."""
+        related_filenames: set[str] = set()
+        for file in new_files:
+            filename = file["filename"]
+            related_filenames.add(filename)
+            markdown_filename = file.get("markdown_file")
+            if markdown_filename:
+                related_filenames.add(markdown_filename)
+            for image in file.get("extracted_images", []):
+                related_filenames.add(image["filename"])
+        return related_filenames
+
+    def _load_historical_files(self, uploads_dir: Path, thread_id: str, excluded_filenames: set[str]) -> list[dict]:
+        """Load historical files using the shared grouping rules."""
+        result = list_files_in_dir(uploads_dir)
+        enrich_file_listing(result, thread_id)
+
+        historical_files: list[dict] = []
+        for file in result["files"]:
+            if file["filename"] in excluded_filenames:
+                continue
+            historical_file = {
+                "filename": file["filename"],
+                "size": int(file["size"]),
+                "path": file.get("virtual_path", f"/mnt/user-data/uploads/{file['filename']}"),
+                "extension": file.get("extension", Path(file["filename"]).suffix),
+            }
+            extracted_images = []
+            for image in file.get("extracted_images", []):
+                if image["filename"] in excluded_filenames:
+                    continue
+                extracted_images.append(
+                    {
+                        "filename": image["filename"],
+                        "size": int(image["size"]),
+                        "path": image.get("virtual_path", f"/mnt/user-data/uploads/{image['filename']}"),
+                        "extension": image.get("extension", Path(image["filename"]).suffix),
+                        "virtual_path": image.get("virtual_path", f"/mnt/user-data/uploads/{image['filename']}"),
+                        "artifact_url": image.get("artifact_url"),
+                    }
+                )
+            if extracted_images:
+                historical_file["extracted_images"] = extracted_images
+            historical_files.append(historical_file)
+        return historical_files
 
     @override
     def before_agent(self, state: UploadsMiddlewareState, runtime: Runtime) -> dict | None:
@@ -153,20 +248,9 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         new_files = self._files_from_kwargs(last_message, uploads_dir) or []
 
         # Collect historical files from the uploads directory (all except the new ones)
-        new_filenames = {f["filename"] for f in new_files}
         historical_files: list[dict] = []
-        if uploads_dir and uploads_dir.exists():
-            for file_path in sorted(uploads_dir.iterdir()):
-                if file_path.is_file() and file_path.name not in new_filenames:
-                    stat = file_path.stat()
-                    historical_files.append(
-                        {
-                            "filename": file_path.name,
-                            "size": stat.st_size,
-                            "path": f"/mnt/user-data/uploads/{file_path.name}",
-                            "extension": file_path.suffix,
-                        }
-                    )
+        if uploads_dir and uploads_dir.exists() and thread_id:
+            historical_files = self._load_historical_files(uploads_dir, thread_id, self._collect_related_new_filenames(new_files))
 
         if not new_files and not historical_files:
             return None

@@ -28,15 +28,24 @@ POST /api/threads/{thread_id}/uploads
   "success": true,
   "files": [
     {
-      "filename": "document.pdf",
-      "size": 1234567,
-      "path": ".deer-flow/threads/{thread_id}/user-data/uploads/document.pdf",
-      "virtual_path": "/mnt/user-data/uploads/document.pdf",
-      "artifact_url": "/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/document.pdf",
+      "filename": "document.docx",
+      "size": "1234567",
+      "path": ".deer-flow/threads/{thread_id}/user-data/uploads/document.docx",
+      "virtual_path": "/mnt/user-data/uploads/document.docx",
+      "artifact_url": "/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/document.docx",
       "markdown_file": "document.md",
       "markdown_path": ".deer-flow/threads/{thread_id}/user-data/uploads/document.md",
       "markdown_virtual_path": "/mnt/user-data/uploads/document.md",
-      "markdown_artifact_url": "/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/document.md"
+      "markdown_artifact_url": "/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/document.md",
+      "extracted_images": [
+        {
+          "filename": "document__image1.png",
+          "size": "34567",
+          "path": ".deer-flow/threads/{thread_id}/user-data/uploads/document__image1.png",
+          "virtual_path": "/mnt/user-data/uploads/document__image1.png",
+          "artifact_url": "/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/document__image1.png"
+        }
+      ]
     }
   ],
   "message": "Successfully uploaded 1 file(s)"
@@ -47,6 +56,7 @@ POST /api/threads/{thread_id}/uploads
 - `path`: 实际文件系统路径（相对于 `backend/` 目录）
 - `virtual_path`: Agent 在沙箱中使用的虚拟路径
 - `artifact_url`: 前端通过 HTTP 访问文件的 URL
+- `.docx` 的 `extracted_images`: 从文档中提取出的图片，会挂在源 `.docx` 条目下
 
 ### 2. 列出已上传文件
 ```
@@ -58,18 +68,39 @@ GET /api/threads/{thread_id}/uploads/list
 {
   "files": [
     {
-      "filename": "document.pdf",
-      "size": 1234567,
-      "path": ".deer-flow/threads/{thread_id}/user-data/uploads/document.pdf",
-      "virtual_path": "/mnt/user-data/uploads/document.pdf",
-      "artifact_url": "/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/document.pdf",
-      "extension": ".pdf",
+      "filename": "document.docx",
+      "size": "1234567",
+      "path": ".deer-flow/threads/{thread_id}/user-data/uploads/document.docx",
+      "virtual_path": "/mnt/user-data/uploads/document.docx",
+      "artifact_url": "/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/document.docx",
+      "extension": ".docx",
+      "modified": 1705997600.0,
+      "extracted_images": [
+        {
+          "filename": "document__image1.png",
+          "size": "34567",
+          "path": ".deer-flow/threads/{thread_id}/user-data/uploads/document__image1.png",
+          "virtual_path": "/mnt/user-data/uploads/document__image1.png",
+          "artifact_url": "/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/document__image1.png"
+        }
+      ]
+    },
+    {
+      "filename": "document.md",
+      "size": "45678",
+      "path": ".deer-flow/threads/{thread_id}/user-data/uploads/document.md",
+      "virtual_path": "/mnt/user-data/uploads/document.md",
+      "artifact_url": "/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/document.md",
+      "extension": ".md",
       "modified": 1705997600.0
     }
   ],
-  "count": 1
+  "count": 2
 }
 ```
+
+`GET /uploads/list` 与上传响应保持一致：`.docx` 的 sidecar images 会出现在
+源文档的 `extracted_images` 中，不会作为独立 uploaded file 条目单独列出。
 
 ### 3. 删除文件
 ```

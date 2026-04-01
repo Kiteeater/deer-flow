@@ -1,5 +1,7 @@
 import type { AIMessage, Message } from "@langchain/langgraph-sdk";
 
+import type { ExtractedImageInfo } from "../uploads/api";
+
 interface GenericMessageGroup<T = string> {
   type: T;
   id: string | undefined;
@@ -332,6 +334,9 @@ export interface FileInMessage {
   size: number; // bytes
   path?: string; // virtual path, may not be set during upload
   status?: "uploading" | "uploaded";
+  markdown_file?: string;
+  markdown_path?: string;
+  extracted_images?: ExtractedImageInfo[];
 }
 
 /**

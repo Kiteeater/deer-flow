@@ -17,6 +17,7 @@ import type { UploadedFileInfo } from "../uploads";
 import { uploadFiles } from "../uploads";
 
 import type { AgentThread, AgentThreadState } from "./types";
+import { buildMessageFilesFromUploadInfo } from "./upload-file-metadata";
 
 export type ToolEndEvent = {
   name: string;
@@ -298,14 +299,8 @@ export function useThreadStream({
               uploadedFileInfo = uploadResponse.files;
 
               // Update optimistic human message with uploaded status + paths
-              const uploadedFiles: FileInMessage[] = uploadedFileInfo.map(
-                (info) => ({
-                  filename: info.filename,
-                  size: info.size,
-                  path: info.virtual_path,
-                  status: "uploaded" as const,
-                }),
-              );
+              const uploadedFiles: FileInMessage[] =
+                buildMessageFilesFromUploadInfo(uploadedFileInfo);
               setOptimisticMessages((messages) => {
                 if (messages.length > 1 && messages[0]) {
                   const humanMessage: Message = messages[0];
@@ -335,14 +330,8 @@ export function useThreadStream({
         }
 
         // Build files metadata for submission (included in additional_kwargs)
-        const filesForSubmit: FileInMessage[] = uploadedFileInfo.map(
-          (info) => ({
-            filename: info.filename,
-            size: info.size,
-            path: info.virtual_path,
-            status: "uploaded" as const,
-          }),
-        );
+        const filesForSubmit: FileInMessage[] =
+          buildMessageFilesFromUploadInfo(uploadedFileInfo);
 
         await thread.submit(
           {

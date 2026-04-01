@@ -405,15 +405,26 @@ Content-Type: multipart/form-data
   "success": true,
   "files": [
     {
-      "filename": "document.pdf",
-      "size": 1234567,
-      "path": ".deer-flow/threads/abc123/user-data/uploads/document.pdf",
-      "virtual_path": "/mnt/user-data/uploads/document.pdf",
-      "artifact_url": "/api/threads/abc123/artifacts/mnt/user-data/uploads/document.pdf",
+      "filename": "document.docx",
+      "size": "1234567",
+      "path": ".deer-flow/threads/abc123/user-data/uploads/document.docx",
+      "virtual_path": "/mnt/user-data/uploads/document.docx",
+      "artifact_url": "/api/threads/abc123/artifacts/mnt/user-data/uploads/document.docx",
       "markdown_file": "document.md",
       "markdown_path": ".deer-flow/threads/abc123/user-data/uploads/document.md",
       "markdown_virtual_path": "/mnt/user-data/uploads/document.md",
-      "markdown_artifact_url": "/api/threads/abc123/artifacts/mnt/user-data/uploads/document.md"
+      "markdown_artifact_url": "/api/threads/abc123/artifacts/mnt/user-data/uploads/document.md",
+      "extracted_images": [
+        {
+          "filename": "document__image1.png",
+          "size": "34567",
+          "path": ".deer-flow/threads/abc123/user-data/uploads/document__image1.png",
+          "virtual_path": "/mnt/user-data/uploads/document__image1.png",
+          "artifact_url": "/api/threads/abc123/artifacts/mnt/user-data/uploads/document__image1.png",
+          "extension": ".png",
+          "modified": 1705997600.0
+        }
+      ]
     }
   ],
   "message": "Successfully uploaded 1 file(s)"
@@ -426,6 +437,10 @@ Content-Type: multipart/form-data
 - Excel (`.xls`, `.xlsx`)
 - Word (`.doc`, `.docx`)
 
+For `.docx` uploads, embedded images are extracted as companion files and
+returned under the source document's `extracted_images` field. These sidecar
+images are not listed as standalone uploaded files in the list endpoint.
+
 #### List Uploaded Files
 
 ```http
@@ -437,18 +452,42 @@ GET /api/threads/{thread_id}/uploads/list
 {
   "files": [
     {
-      "filename": "document.pdf",
-      "size": 1234567,
-      "path": ".deer-flow/threads/abc123/user-data/uploads/document.pdf",
-      "virtual_path": "/mnt/user-data/uploads/document.pdf",
-      "artifact_url": "/api/threads/abc123/artifacts/mnt/user-data/uploads/document.pdf",
-      "extension": ".pdf",
+      "filename": "document.docx",
+      "size": "1234567",
+      "path": ".deer-flow/threads/abc123/user-data/uploads/document.docx",
+      "virtual_path": "/mnt/user-data/uploads/document.docx",
+      "artifact_url": "/api/threads/abc123/artifacts/mnt/user-data/uploads/document.docx",
+      "extension": ".docx",
+      "modified": 1705997600.0,
+      "extracted_images": [
+        {
+          "filename": "document__image1.png",
+          "size": "34567",
+          "path": ".deer-flow/threads/abc123/user-data/uploads/document__image1.png",
+          "virtual_path": "/mnt/user-data/uploads/document__image1.png",
+          "artifact_url": "/api/threads/abc123/artifacts/mnt/user-data/uploads/document__image1.png",
+          "extension": ".png",
+          "modified": 1705997600.0
+        }
+      ]
+    },
+    {
+      "filename": "document.md",
+      "size": "45678",
+      "path": ".deer-flow/threads/abc123/user-data/uploads/document.md",
+      "virtual_path": "/mnt/user-data/uploads/document.md",
+      "artifact_url": "/api/threads/abc123/artifacts/mnt/user-data/uploads/document.md",
+      "extension": ".md",
       "modified": 1705997600.0
     }
   ],
-  "count": 1
+  "count": 2
 }
 ```
+
+For `.docx` entries, `extracted_images` uses the same grouping semantics as the
+upload response. Sidecar images are grouped under the source document and are
+not listed as standalone uploaded files.
 
 #### Delete File
 

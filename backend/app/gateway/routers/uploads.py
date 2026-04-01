@@ -11,7 +11,9 @@ from deerflow.config.paths import get_paths
 from deerflow.sandbox.sandbox_provider import get_sandbox_provider
 from deerflow.uploads.manager import (
     PathTraversalError,
+    delete_docx_sidecars,
     delete_file_safe,
+    docx_sidecar_manifest_path,
     enrich_file_listing,
     ensure_uploads_dir,
     get_uploads_dir,
@@ -19,19 +21,53 @@ from deerflow.uploads.manager import (
     normalize_filename,
     upload_artifact_url,
     upload_virtual_path,
+    write_docx_sidecar_manifest,
 )
-from deerflow.utils.file_conversion import CONVERTIBLE_EXTENSIONS, convert_file_to_markdown
+from deerflow.utils.file_conversion import (
+    CONVERTIBLE_EXTENSIONS,
+    convert_file_to_markdown,
+    extract_docx_images,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/threads/{thread_id}/uploads", tags=["uploads"])
 
 
+class ExtractedImageInfo(BaseModel):
+    """Metadata for a document image extracted into the uploads directory."""
+
+    filename: str
+    size: str
+    path: str
+    virtual_path: str
+    artifact_url: str
+    extension: str | None = None
+    modified: float | None = None
+
+
+class UploadedFileInfo(BaseModel):
+    """Structured upload metadata returned by the gateway."""
+
+    filename: str
+    size: str
+    path: str
+    virtual_path: str
+    artifact_url: str
+    extension: str | None = None
+    modified: float | None = None
+    markdown_file: str | None = None
+    markdown_path: str | None = None
+    markdown_virtual_path: str | None = None
+    markdown_artifact_url: str | None = None
+    extracted_images: list[ExtractedImageInfo] | None = None
+
+
 class UploadResponse(BaseModel):
     """Response model for file upload."""
 
     success: bool
-    files: list[dict[str, str]]
+    files: list[UploadedFileInfo]
     message: str
 
 
@@ -119,6 +155,40 @@ async def upload_files(
                     file_info["markdown_virtual_path"] = md_virtual_path
                     file_info["markdown_artifact_url"] = upload_artifact_url(thread_id, md_path.name)
 
+                if file_ext == ".docx":
+                    delete_docx_sidecars(file_path)
+                    extracted_images = []
+                    extracted_image_paths = await extract_docx_images(file_path)
+                    write_docx_sidecar_manifest(file_path, extracted_image_paths)
+                    manifest_path = docx_sidecar_manifest_path(file_path)
+                    manifest_virtual_path = upload_virtual_path(manifest_path.name)
+                    manifest_bytes = manifest_path.read_bytes() if manifest_path.is_file() else b""
+                    if sandbox_id != "local" and manifest_bytes:
+                        _make_file_sandbox_writable(manifest_path)
+                        sandbox.update_file(manifest_virtual_path, manifest_bytes)
+                    for image_path in extracted_image_paths:
+                        image_virtual_path = upload_virtual_path(image_path.name)
+                        image_bytes = image_path.read_bytes()
+
+                        if sandbox_id != "local":
+                            _make_file_sandbox_writable(image_path)
+                            sandbox.update_file(image_virtual_path, image_bytes)
+
+                        extracted_images.append(
+                            {
+                                "filename": image_path.name,
+                                "size": str(image_path.stat().st_size),
+                                "path": str(sandbox_uploads / image_path.name),
+                                "virtual_path": image_virtual_path,
+                                "artifact_url": upload_artifact_url(thread_id, image_path.name),
+                                "extension": image_path.suffix,
+                                "modified": image_path.stat().st_mtime,
+                            }
+                        )
+
+                    if extracted_images:
+                        file_info["extracted_images"] = extracted_images
+
             uploaded_files.append(file_info)
 
         except Exception as e:
@@ -146,6 +216,8 @@ async def list_uploaded_files(thread_id: str) -> dict:
     sandbox_uploads = get_paths().sandbox_uploads_dir(thread_id)
     for f in result["files"]:
         f["path"] = str(sandbox_uploads / f["filename"])
+        for image in f.get("extracted_images", []):
+            image["path"] = str(sandbox_uploads / image["filename"])
 
     return result
 

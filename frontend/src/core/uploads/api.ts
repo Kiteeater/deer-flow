@@ -4,9 +4,19 @@
 
 import { getBackendBaseURL } from "../config";
 
+export interface ExtractedImageInfo {
+  filename: string;
+  size: number | string;
+  path: string;
+  virtual_path: string;
+  artifact_url: string;
+  extension?: string;
+  modified?: number;
+}
+
 export interface UploadedFileInfo {
   filename: string;
-  size: number;
+  size: number | string;
   path: string;
   virtual_path: string;
   artifact_url: string;
@@ -16,6 +26,7 @@ export interface UploadedFileInfo {
   markdown_path?: string;
   markdown_virtual_path?: string;
   markdown_artifact_url?: string;
+  extracted_images?: ExtractedImageInfo[];
 }
 
 export interface UploadResponse {

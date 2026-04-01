@@ -18,7 +18,7 @@ from app.gateway.routers.skills import SkillInstallResponse, SkillResponse, Skil
 from app.gateway.routers.uploads import UploadResponse
 from deerflow.client import DeerFlowClient
 from deerflow.config.paths import Paths
-from deerflow.uploads.manager import PathTraversalError
+from deerflow.uploads.manager import PathTraversalError, write_docx_sidecar_manifest
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -869,6 +869,77 @@ class TestUploads:
             assert result["files"][0]["markdown_file"] == "first.md"
             assert result["files"][1]["markdown_file"] == "second.md"
 
+    def test_upload_files_returns_extracted_images_for_docx(self, client):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            uploads_dir = tmp_path / "uploads"
+            uploads_dir.mkdir()
+
+            src_file = tmp_path / "report.docx"
+            src_file.write_bytes(b"docx")
+
+            async def fake_convert(path: Path) -> Path:
+                md_path = path.with_suffix(".md")
+                md_path.write_text("converted", encoding="utf-8")
+                return md_path
+
+            async def fake_extract(path: Path) -> list[Path]:
+                image = path.with_name("report__image1.png")
+                image.write_bytes(b"png")
+                return [image]
+
+            with (
+                patch("deerflow.client.get_uploads_dir", return_value=uploads_dir),
+                patch("deerflow.client.ensure_uploads_dir", return_value=uploads_dir),
+                patch("deerflow.utils.file_conversion.convert_file_to_markdown", side_effect=fake_convert),
+                patch("deerflow.utils.file_conversion.extract_docx_images", side_effect=fake_extract),
+            ):
+                result = client.upload_files("thread-1", [src_file])
+
+            assert result["success"] is True
+            assert result["files"][0]["filename"] == "report.docx"
+            assert result["files"][0]["markdown_file"] == "report.md"
+            assert [img["filename"] for img in result["files"][0]["extracted_images"]] == ["report__image1.png"]
+
+    def test_upload_files_replaces_existing_docx_sidecars(self, client):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            uploads_dir = tmp_path / "uploads"
+            uploads_dir.mkdir()
+
+            existing_docx = uploads_dir / "report.docx"
+            existing_docx.write_bytes(b"old-docx")
+            old_image = uploads_dir / "report__image1.png"
+            old_image.write_bytes(b"old-png")
+            stale_image = uploads_dir / "report__image2.jpeg"
+            stale_image.write_bytes(b"stale-jpeg")
+            write_docx_sidecar_manifest(existing_docx, [old_image, stale_image])
+
+            src_file = tmp_path / "report.docx"
+            src_file.write_bytes(b"new-docx")
+
+            async def fake_convert(path: Path) -> Path:
+                md_path = path.with_suffix(".md")
+                md_path.write_text("converted", encoding="utf-8")
+                return md_path
+
+            async def fake_extract(path: Path) -> list[Path]:
+                image = path.with_name("report__image1.png")
+                image.write_bytes(b"new-png")
+                return [image]
+
+            with (
+                patch("deerflow.client.get_uploads_dir", return_value=uploads_dir),
+                patch("deerflow.client.ensure_uploads_dir", return_value=uploads_dir),
+                patch("deerflow.utils.file_conversion.convert_file_to_markdown", side_effect=fake_convert),
+                patch("deerflow.utils.file_conversion.extract_docx_images", side_effect=fake_extract),
+            ):
+                result = client.upload_files("thread-1", [src_file])
+
+            assert result["success"] is True
+            assert (uploads_dir / "report__image1.png").read_bytes() == b"new-png"
+            assert not stale_image.exists()
+
     def test_list_uploads(self, client):
         with tempfile.TemporaryDirectory() as tmp:
             uploads_dir = Path(tmp)
@@ -886,6 +957,22 @@ class TestUploads:
             for f in result["files"]:
                 assert "artifact_url" in f
 
+    def test_list_uploads_groups_docx_sidecars_under_source_file(self, client):
+        with tempfile.TemporaryDirectory() as tmp:
+            uploads_dir = Path(tmp)
+            source = uploads_dir / "report.docx"
+            source.write_bytes(b"docx")
+            (uploads_dir / "report.md").write_text("converted", encoding="utf-8")
+            image = uploads_dir / "report__image1.png"
+            image.write_bytes(b"png")
+            write_docx_sidecar_manifest(source, [image])
+
+            with patch("deerflow.client.get_uploads_dir", return_value=uploads_dir), patch("deerflow.client.ensure_uploads_dir", return_value=uploads_dir):
+                result = client.list_uploads("thread-1")
+
+            assert [f["filename"] for f in result["files"]] == ["report.docx", "report.md"]
+            assert [img["filename"] for img in result["files"][0]["extracted_images"]] == ["report__image1.png"]
+
     def test_delete_upload(self, client):
         with tempfile.TemporaryDirectory() as tmp:
             uploads_dir = Path(tmp)
@@ -897,6 +984,35 @@ class TestUploads:
             assert result["success"] is True
             assert "delete-me.txt" in result["message"]
             assert not (uploads_dir / "delete-me.txt").exists()
+
+    def test_delete_upload_removes_docx_sidecars(self, client):
+        with tempfile.TemporaryDirectory() as tmp:
+            uploads_dir = Path(tmp)
+            source = uploads_dir / "report.docx"
+            source.write_bytes(b"docx")
+            (uploads_dir / "report.md").write_text("converted", encoding="utf-8")
+            image = uploads_dir / "report__image1.png"
+            image.write_bytes(b"png")
+            write_docx_sidecar_manifest(source, [image])
+
+            with patch("deerflow.client.get_uploads_dir", return_value=uploads_dir), patch("deerflow.client.ensure_uploads_dir", return_value=uploads_dir):
+                result = client.delete_upload("thread-1", "report.docx")
+
+            assert result["success"] is True
+            assert not (uploads_dir / "report.docx").exists()
+            assert not (uploads_dir / "report.md").exists()
+            assert not (uploads_dir / "report__image1.png").exists()
+
+    def test_list_uploads_keeps_untracked_matching_png_as_standalone_file(self, client):
+        with tempfile.TemporaryDirectory() as tmp:
+            uploads_dir = Path(tmp)
+            (uploads_dir / "report.docx").write_bytes(b"docx")
+            (uploads_dir / "report__image1.png").write_bytes(b"png")
+
+            with patch("deerflow.client.get_uploads_dir", return_value=uploads_dir), patch("deerflow.client.ensure_uploads_dir", return_value=uploads_dir):
+                result = client.list_uploads("thread-1")
+
+            assert [f["filename"] for f in result["files"]] == ["report.docx", "report__image1.png"]
 
     def test_delete_upload_not_found(self, client):
         with tempfile.TemporaryDirectory() as tmp:

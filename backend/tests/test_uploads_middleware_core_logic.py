@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from deerflow.agents.middlewares.uploads_middleware import UploadsMiddleware
 from deerflow.config.paths import Paths
+from deerflow.uploads.manager import write_docx_sidecar_manifest
 
 THREAD_ID = "thread-abc123"
 
@@ -143,6 +144,36 @@ class TestFilesFromKwargs:
         assert result is not None
         assert result[0]["size"] == 0
 
+    def test_preserves_extracted_images_metadata(self, tmp_path):
+        mw = _middleware(tmp_path)
+        uploads_dir = _uploads_dir(tmp_path)
+        (uploads_dir / "report.docx").write_bytes(b"docx")
+        (uploads_dir / "report__image1.png").write_bytes(b"png")
+        msg = _human(
+            "hi",
+            files=[
+                {
+                    "filename": "report.docx",
+                    "size": 12,
+                    "path": "/mnt/user-data/uploads/report.docx",
+                    "extracted_images": [
+                        {
+                            "filename": "report__image1.png",
+                            "size": 3,
+                            "path": "/mnt/user-data/uploads/report__image1.png",
+                            "virtual_path": "/mnt/user-data/uploads/report__image1.png",
+                            "artifact_url": "/api/threads/thread-abc123/artifacts/mnt/user-data/uploads/report__image1.png",
+                        }
+                    ],
+                }
+            ],
+        )
+
+        result = mw._files_from_kwargs(msg, uploads_dir)
+
+        assert result is not None
+        assert result[0]["extracted_images"][0]["filename"] == "report__image1.png"
+
 
 # ---------------------------------------------------------------------------
 # _create_files_message
@@ -187,6 +218,28 @@ class TestCreateFilesMessage:
         mw = _middleware(tmp_path)
         msg = mw._create_files_message([self._new_file()], [])
         assert "read_file" in msg
+
+    def test_extracted_images_include_view_image_guidance(self, tmp_path):
+        mw = _middleware(tmp_path)
+        msg = mw._create_files_message(
+            [
+                {
+                    "filename": "report.docx",
+                    "size": 1024,
+                    "path": "/mnt/user-data/uploads/report.docx",
+                    "extracted_images": [
+                        {
+                            "filename": "report__image1.png",
+                            "path": "/mnt/user-data/uploads/report__image1.png",
+                        }
+                    ],
+                }
+            ],
+            [],
+        )
+
+        assert "report__image1.png" in msg
+        assert "view_image" in msg
 
     def test_empty_new_files_produces_empty_marker(self, tmp_path):
         mw = _middleware(tmp_path)
@@ -292,6 +345,63 @@ class TestBeforeAgent:
             }
         ]
 
+    def test_uploaded_files_include_extracted_images_in_state_update(self, tmp_path):
+        mw = _middleware(tmp_path)
+        uploads_dir = _uploads_dir(tmp_path)
+        (uploads_dir / "report.docx").write_bytes(b"docx")
+        (uploads_dir / "report__image1.png").write_bytes(b"png")
+
+        msg = _human(
+            "review",
+            files=[
+                {
+                    "filename": "report.docx",
+                    "size": 5,
+                    "path": "/mnt/user-data/uploads/report.docx",
+                    "extracted_images": [
+                        {
+                            "filename": "report__image1.png",
+                            "size": 3,
+                            "path": "/mnt/user-data/uploads/report__image1.png",
+                            "virtual_path": "/mnt/user-data/uploads/report__image1.png",
+                            "artifact_url": "/api/threads/thread-abc123/artifacts/mnt/user-data/uploads/report__image1.png",
+                        }
+                    ],
+                }
+            ],
+        )
+        result = mw.before_agent(self._state(msg), _runtime())
+
+        assert result is not None
+        assert result["uploaded_files"][0]["extracted_images"][0]["filename"] == "report__image1.png"
+
+    def test_new_convertible_uploads_expose_markdown_companion_in_message(self, tmp_path):
+        mw = _middleware(tmp_path)
+        uploads_dir = _uploads_dir(tmp_path)
+        (uploads_dir / "report.docx").write_bytes(b"docx")
+        (uploads_dir / "report.md").write_text("converted", encoding="utf-8")
+
+        msg = _human(
+            "review the upload",
+            files=[
+                {
+                    "filename": "report.docx",
+                    "size": 5,
+                    "path": "/mnt/user-data/uploads/report.docx",
+                    "markdown_file": "report.md",
+                    "markdown_path": "/mnt/user-data/uploads/report.md",
+                }
+            ],
+        )
+        result = mw.before_agent(self._state(msg), _runtime())
+
+        assert result is not None
+        content = result["messages"][-1].content
+        assert "report.docx" in content
+        assert "report.md" in content
+        assert "/mnt/user-data/uploads/report.md" in content
+        assert "previous messages" not in content
+
     def test_historical_files_from_uploads_dir_excluding_new(self, tmp_path):
         mw = _middleware(tmp_path)
         uploads_dir = _uploads_dir(tmp_path)
@@ -339,3 +449,22 @@ class TestBeforeAgent:
         result = mw.before_agent(self._state(msg), _runtime())
 
         assert result["messages"][-1].id == "original-id-42"
+
+    def test_historical_docx_groups_sidecar_images_under_source_file(self, tmp_path):
+        mw = _middleware(tmp_path)
+        uploads_dir = _uploads_dir(tmp_path)
+        source = uploads_dir / "report.docx"
+        source.write_bytes(b"docx")
+        (uploads_dir / "report.md").write_text("converted", encoding="utf-8")
+        image = uploads_dir / "report__image1.png"
+        image.write_bytes(b"png")
+        write_docx_sidecar_manifest(source, [image])
+
+        result = mw.before_agent(self._state(_human("analyse historical uploads")), _runtime())
+
+        assert result is not None
+        content = result["messages"][-1].content
+        assert "report.docx" in content
+        assert "report__image1.png" in content
+        assert "view_image" in content
+        assert "- report__image1.png" not in content
