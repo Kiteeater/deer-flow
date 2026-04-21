@@ -79,10 +79,10 @@ _isolated_loop_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="suba
 # Persistent event loop for isolated subagent executions triggered from an
 # already-running parent loop. Reusing one long-lived loop avoids creating a
 # fresh loop per execution and then closing async resources bound to it.
-_ISOLATED_SUBAGENT_LOOP: asyncio.AbstractEventLoop | None = None
-_ISOLATED_SUBAGENT_LOOP_THREAD: threading.Thread | None = None
-_ISOLATED_SUBAGENT_LOOP_STARTED: threading.Event | None = None
-_ISOLATED_SUBAGENT_LOOP_LOCK = threading.Lock()
+_isolated_subagent_loop: asyncio.AbstractEventLoop | None = None
+_isolated_subagent_loop_thread: threading.Thread | None = None
+_isolated_subagent_loop_started: threading.Event | None = None
+_isolated_subagent_loop_lock = threading.Lock()
 
 
 def _run_isolated_subagent_loop(
@@ -100,15 +100,15 @@ def _run_isolated_subagent_loop(
 
 def _shutdown_isolated_subagent_loop() -> None:
     """Stop and close the persistent isolated subagent loop."""
-    global _ISOLATED_SUBAGENT_LOOP, _ISOLATED_SUBAGENT_LOOP_THREAD, _ISOLATED_SUBAGENT_LOOP_STARTED
+    global _isolated_subagent_loop, _isolated_subagent_loop_thread, _isolated_subagent_loop_started
 
-    with _ISOLATED_SUBAGENT_LOOP_LOCK:
-        loop = _ISOLATED_SUBAGENT_LOOP
-        thread = _ISOLATED_SUBAGENT_LOOP_THREAD
-        started_event = _ISOLATED_SUBAGENT_LOOP_STARTED
-        _ISOLATED_SUBAGENT_LOOP = None
-        _ISOLATED_SUBAGENT_LOOP_THREAD = None
-        _ISOLATED_SUBAGENT_LOOP_STARTED = None
+    with _isolated_subagent_loop_lock:
+        loop = _isolated_subagent_loop
+        thread = _isolated_subagent_loop_thread
+        started_event = _isolated_subagent_loop_started
+        _isolated_subagent_loop = None
+        _isolated_subagent_loop_thread = None
+        _isolated_subagent_loop_started = None
 
     if loop is None:
         return
@@ -131,16 +131,16 @@ atexit.register(_shutdown_isolated_subagent_loop)
 
 def _get_isolated_subagent_loop() -> asyncio.AbstractEventLoop:
     """Return the persistent event loop used by isolated subagent executions."""
-    global _ISOLATED_SUBAGENT_LOOP, _ISOLATED_SUBAGENT_LOOP_THREAD, _ISOLATED_SUBAGENT_LOOP_STARTED
-    with _ISOLATED_SUBAGENT_LOOP_LOCK:
+    global _isolated_subagent_loop, _isolated_subagent_loop_thread, _isolated_subagent_loop_started
+    with _isolated_subagent_loop_lock:
         thread_is_alive = (
-            _ISOLATED_SUBAGENT_LOOP_THREAD is not None
-            and _ISOLATED_SUBAGENT_LOOP_THREAD.is_alive()
+            _isolated_subagent_loop_thread is not None
+            and _isolated_subagent_loop_thread.is_alive()
         )
         loop_is_usable = (
-            _ISOLATED_SUBAGENT_LOOP is not None
-            and not _ISOLATED_SUBAGENT_LOOP.is_closed()
-            and _ISOLATED_SUBAGENT_LOOP.is_running()
+            _isolated_subagent_loop is not None
+            and not _isolated_subagent_loop.is_closed()
+            and _isolated_subagent_loop.is_running()
             and thread_is_alive
         )
 
@@ -159,11 +159,11 @@ def _get_isolated_subagent_loop() -> asyncio.AbstractEventLoop:
                 thread.join(timeout=1)
                 loop.close()
                 raise RuntimeError("Timed out starting isolated subagent event loop")
-            _ISOLATED_SUBAGENT_LOOP = loop
-            _ISOLATED_SUBAGENT_LOOP_THREAD = thread
-            _ISOLATED_SUBAGENT_LOOP_STARTED = started_event
+            _isolated_subagent_loop = loop
+            _isolated_subagent_loop_thread = thread
+            _isolated_subagent_loop_started = started_event
 
-        return _ISOLATED_SUBAGENT_LOOP
+        return _isolated_subagent_loop
 
 
 def _filter_tools(
