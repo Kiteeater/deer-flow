@@ -1,5 +1,6 @@
 """Subagent execution engine."""
 
+import atexit
 import asyncio
 import logging
 import threading
@@ -72,12 +73,97 @@ _background_tasks_lock = threading.Lock()
 # Thread pool for background task scheduling and orchestration
 _scheduler_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent-scheduler-")
 
-# Thread pool for actual subagent execution (with timeout support)
-# Larger pool to avoid blocking when scheduler submits execution tasks
-_execution_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent-exec-")
-
 # Dedicated pool for sync execute() calls made from an already-running event loop.
 _isolated_loop_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent-isolated-")
+
+# Persistent event loop for isolated subagent executions triggered from an
+# already-running parent loop. Reusing one long-lived loop avoids creating a
+# fresh loop per execution and then closing async resources bound to it.
+_ISOLATED_SUBAGENT_LOOP: asyncio.AbstractEventLoop | None = None
+_ISOLATED_SUBAGENT_LOOP_THREAD: threading.Thread | None = None
+_ISOLATED_SUBAGENT_LOOP_STARTED: threading.Event | None = None
+_ISOLATED_SUBAGENT_LOOP_LOCK = threading.Lock()
+
+
+def _run_isolated_subagent_loop(
+    loop: asyncio.AbstractEventLoop,
+    started_event: threading.Event,
+) -> None:
+    """Run the persistent isolated subagent loop in a dedicated daemon thread."""
+    asyncio.set_event_loop(loop)
+    loop.call_soon(started_event.set)
+    try:
+        loop.run_forever()
+    finally:
+        started_event.clear()
+
+
+def _shutdown_isolated_subagent_loop() -> None:
+    """Stop and close the persistent isolated subagent loop."""
+    global _ISOLATED_SUBAGENT_LOOP, _ISOLATED_SUBAGENT_LOOP_THREAD, _ISOLATED_SUBAGENT_LOOP_STARTED
+
+    with _ISOLATED_SUBAGENT_LOOP_LOCK:
+        loop = _ISOLATED_SUBAGENT_LOOP
+        thread = _ISOLATED_SUBAGENT_LOOP_THREAD
+        started_event = _ISOLATED_SUBAGENT_LOOP_STARTED
+        _ISOLATED_SUBAGENT_LOOP = None
+        _ISOLATED_SUBAGENT_LOOP_THREAD = None
+        _ISOLATED_SUBAGENT_LOOP_STARTED = None
+
+    if loop is None:
+        return
+
+    if loop.is_running():
+        loop.call_soon_threadsafe(loop.stop)
+
+    if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+        thread.join(timeout=1)
+
+    if not loop.is_closed():
+        loop.close()
+
+    if started_event is not None:
+        started_event.clear()
+
+
+atexit.register(_shutdown_isolated_subagent_loop)
+
+
+def _get_isolated_subagent_loop() -> asyncio.AbstractEventLoop:
+    """Return the persistent event loop used by isolated subagent executions."""
+    global _ISOLATED_SUBAGENT_LOOP, _ISOLATED_SUBAGENT_LOOP_THREAD, _ISOLATED_SUBAGENT_LOOP_STARTED
+    with _ISOLATED_SUBAGENT_LOOP_LOCK:
+        thread_is_alive = (
+            _ISOLATED_SUBAGENT_LOOP_THREAD is not None
+            and _ISOLATED_SUBAGENT_LOOP_THREAD.is_alive()
+        )
+        loop_is_usable = (
+            _ISOLATED_SUBAGENT_LOOP is not None
+            and not _ISOLATED_SUBAGENT_LOOP.is_closed()
+            and _ISOLATED_SUBAGENT_LOOP.is_running()
+            and thread_is_alive
+        )
+
+        if not loop_is_usable:
+            loop = asyncio.new_event_loop()
+            started_event = threading.Event()
+            thread = threading.Thread(
+                target=_run_isolated_subagent_loop,
+                args=(loop, started_event),
+                name="subagent-persistent-loop",
+                daemon=True,
+            )
+            thread.start()
+            if not started_event.wait(timeout=5):
+                loop.call_soon_threadsafe(loop.stop)
+                thread.join(timeout=1)
+                loop.close()
+                raise RuntimeError("Timed out starting isolated subagent event loop")
+            _ISOLATED_SUBAGENT_LOOP = loop
+            _ISOLATED_SUBAGENT_LOOP_THREAD = thread
+            _ISOLATED_SUBAGENT_LOOP_STARTED = started_event
+
+        return _ISOLATED_SUBAGENT_LOOP
 
 
 def _filter_tools(
@@ -378,42 +464,27 @@ class SubagentExecutor:
         return result
 
     def _execute_in_isolated_loop(self, task: str, result_holder: SubagentResult | None = None) -> SubagentResult:
-        """Execute the subagent in a completely fresh event loop.
+        """Execute the subagent on the persistent isolated event loop.
 
-        This method is designed to run in a separate thread to ensure complete
-        isolation from any parent event loop, preventing conflicts with asyncio
-        primitives that may be bound to the parent loop (e.g., httpx clients).
+        This method is used by the sync ``execute()`` path when the caller is
+        already running inside an event loop. The actual coroutine runs on the
+        long-lived isolated loop so shared async clients are not tied to a
+        short-lived loop that gets closed after each execution.
         """
+        future: Future[SubagentResult] | None = None
         try:
-            previous_loop = asyncio.get_event_loop()
-        except RuntimeError:
-            previous_loop = None
-
-        # Create and set a new event loop for this thread
-        loop = asyncio.new_event_loop()
-        try:
-            asyncio.set_event_loop(loop)
-            return loop.run_until_complete(self._aexecute(task, result_holder))
-        finally:
-            try:
-                pending = asyncio.all_tasks(loop)
-                if pending:
-                    for task_obj in pending:
-                        task_obj.cancel()
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-
-                loop.run_until_complete(loop.shutdown_asyncgens())
-                loop.run_until_complete(loop.shutdown_default_executor())
-            except Exception:
+            future = asyncio.run_coroutine_threadsafe(
+                self._aexecute(task, result_holder),
+                _get_isolated_subagent_loop(),
+            )
+            return future.result()
+        except Exception:
+            if future is None:
                 logger.debug(
                     f"[trace={self.trace_id}] Failed while cleaning up isolated event loop for subagent {self.config.name}",
                     exc_info=True,
                 )
-            finally:
-                try:
-                    loop.close()
-                finally:
-                    asyncio.set_event_loop(previous_loop)
+            raise
 
     def execute(self, task: str, result_holder: SubagentResult | None = None) -> SubagentResult:
         """Execute a task synchronously (wrapper around async execution).
@@ -496,9 +567,12 @@ class SubagentExecutor:
                 result_holder = _background_tasks[task_id]
 
             try:
-                # Submit execution to execution pool with timeout
-                # Pass result_holder so execute() can update it in real-time
-                execution_future: Future = _execution_pool.submit(self.execute, task, result_holder)
+                # Submit execution directly to the persistent isolated loop so the
+                # background path does not create a temporary loop via execute().
+                execution_future = asyncio.run_coroutine_threadsafe(
+                    self._aexecute(task, result_holder),
+                    _get_isolated_subagent_loop(),
+                )
                 try:
                     # Wait for execution with timeout
                     exec_result = execution_future.result(timeout=self.config.timeout_seconds)
