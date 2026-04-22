@@ -1,7 +1,7 @@
 """Subagent execution engine."""
 
-import atexit
 import asyncio
+import atexit
 import logging
 import threading
 import uuid
