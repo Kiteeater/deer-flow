@@ -24,6 +24,12 @@ from deerflow.subagents.config import SubagentConfig
 logger = logging.getLogger(__name__)
 
 
+_previous_shutdown_isolated_subagent_loop = globals().get("_shutdown_isolated_subagent_loop")
+if callable(_previous_shutdown_isolated_subagent_loop):
+    atexit.unregister(_previous_shutdown_isolated_subagent_loop)
+    _previous_shutdown_isolated_subagent_loop()
+
+
 class SubagentStatus(Enum):
     """Status of a subagent execution."""
 
@@ -119,8 +125,19 @@ def _shutdown_isolated_subagent_loop() -> None:
     if thread is not None and thread.is_alive() and thread is not threading.current_thread():
         thread.join(timeout=1)
 
+    thread_stopped = thread is None or not thread.is_alive()
+    loop_stopped = not loop.is_running()
+
     if not loop.is_closed():
-        loop.close()
+        if thread_stopped and loop_stopped:
+            loop.close()
+        else:
+            logger.warning(
+                "Skipping close of isolated subagent loop because shutdown did not complete "
+                "within timeout (thread_alive=%s, loop_running=%s)",
+                thread is not None and thread.is_alive(),
+                loop.is_running(),
+            )
 
     if started_event is not None:
         started_event.clear()
@@ -481,7 +498,12 @@ class SubagentExecutor:
         except Exception:
             if future is None:
                 logger.debug(
-                    f"[trace={self.trace_id}] Failed while cleaning up isolated event loop for subagent {self.config.name}",
+                    f"[trace={self.trace_id}] Failed to submit subagent {self.config.name} to the isolated event loop",
+                    exc_info=True,
+                )
+            else:
+                logger.debug(
+                    f"[trace={self.trace_id}] Subagent {self.config.name} failed while executing on the isolated event loop",
                     exc_info=True,
                 )
             raise
