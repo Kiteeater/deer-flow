@@ -133,8 +133,7 @@ def _shutdown_isolated_subagent_loop() -> None:
             loop.close()
         else:
             logger.warning(
-                "Skipping close of isolated subagent loop because shutdown did not complete "
-                "within timeout (thread_alive=%s, loop_running=%s)",
+                "Skipping close of isolated subagent loop because shutdown did not complete within timeout (thread_alive=%s, loop_running=%s)",
                 thread is not None and thread.is_alive(),
                 loop.is_running(),
             )
@@ -150,16 +149,8 @@ def _get_isolated_subagent_loop() -> asyncio.AbstractEventLoop:
     """Return the persistent event loop used by isolated subagent executions."""
     global _isolated_subagent_loop, _isolated_subagent_loop_thread, _isolated_subagent_loop_started
     with _isolated_subagent_loop_lock:
-        thread_is_alive = (
-            _isolated_subagent_loop_thread is not None
-            and _isolated_subagent_loop_thread.is_alive()
-        )
-        loop_is_usable = (
-            _isolated_subagent_loop is not None
-            and not _isolated_subagent_loop.is_closed()
-            and _isolated_subagent_loop.is_running()
-            and thread_is_alive
-        )
+        thread_is_alive = _isolated_subagent_loop_thread is not None and _isolated_subagent_loop_thread.is_alive()
+        loop_is_usable = _isolated_subagent_loop is not None and not _isolated_subagent_loop.is_closed() and _isolated_subagent_loop.is_running() and thread_is_alive
 
         if not loop_is_usable:
             loop = asyncio.new_event_loop()
