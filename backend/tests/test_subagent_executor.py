@@ -434,11 +434,13 @@ class TestSyncExecutionPath:
         assert result.result == "Thread pool result"
 
     @pytest.mark.anyio
-    async def test_execute_in_running_event_loop_uses_isolated_thread(self, classes, base_config, mock_agent, msg):
-        """Test that execute() uses the isolated-thread path inside a running loop."""
+    async def test_execute_in_running_event_loop_calls_isolated_loop_directly(self, classes, base_config, mock_agent, msg):
+        """Test that execute() calls the isolated-loop helper directly in a running loop."""
         SubagentExecutor = classes["SubagentExecutor"]
         SubagentStatus = classes["SubagentStatus"]
 
+        caller_thread = threading.current_thread().name
+        isolated_helper_threads = []
         execution_threads = []
         final_state = {
             "messages": [
@@ -459,13 +461,20 @@ class TestSyncExecutionPath:
             thread_id="test-thread",
         )
 
+        original_isolated_execute = executor._execute_in_isolated_loop
+
+        def tracked_isolated_execute(task, result_holder=None):
+            isolated_helper_threads.append(threading.current_thread().name)
+            return original_isolated_execute(task, result_holder)
+
         with patch.object(executor, "_create_agent", return_value=mock_agent):
-            with patch.object(executor, "_execute_in_isolated_loop", wraps=executor._execute_in_isolated_loop) as isolated:
+            with patch.object(executor, "_execute_in_isolated_loop", side_effect=tracked_isolated_execute) as isolated:
                 result = executor.execute("Task")
 
         assert isolated.call_count == 1
+        assert isolated_helper_threads == [caller_thread]
         assert execution_threads
-        assert all(name.startswith("subagent-") for name in execution_threads)
+        assert execution_threads == ["subagent-persistent-loop"]
         assert result.status == SubagentStatus.COMPLETED
         assert result.result == "Async loop result"
 

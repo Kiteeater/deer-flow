@@ -79,9 +79,6 @@ _background_tasks_lock = threading.Lock()
 # Thread pool for background task scheduling and orchestration
 _scheduler_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent-scheduler-")
 
-# Dedicated pool for sync execute() calls made from an already-running event loop.
-_isolated_loop_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent-isolated-")
-
 # Persistent event loop for isolated subagent executions triggered from an
 # already-running parent loop. Reusing one long-lived loop avoids creating a
 # fresh loop per execution and then closing async resources bound to it.
@@ -111,7 +108,6 @@ def _shutdown_isolated_subagent_loop() -> None:
     with _isolated_subagent_loop_lock:
         loop = _isolated_subagent_loop
         thread = _isolated_subagent_loop_thread
-        started_event = _isolated_subagent_loop_started
         _isolated_subagent_loop = None
         _isolated_subagent_loop_thread = None
         _isolated_subagent_loop_started = None
@@ -137,10 +133,6 @@ def _shutdown_isolated_subagent_loop() -> None:
                 thread is not None and thread.is_alive(),
                 loop.is_running(),
             )
-
-    if started_event is not None:
-        started_event.clear()
-
 
 atexit.register(_shutdown_isolated_subagent_loop)
 
@@ -475,9 +467,10 @@ class SubagentExecutor:
         """Execute the subagent on the persistent isolated event loop.
 
         This method is used by the sync ``execute()`` path when the caller is
-        already running inside an event loop. The actual coroutine runs on the
-        long-lived isolated loop so shared async clients are not tied to a
-        short-lived loop that gets closed after each execution.
+        already running inside an event loop. Because ``execute()`` is a sync
+        API, this path blocks the caller while the actual coroutine runs on the
+        long-lived isolated loop. Reusing that loop keeps shared async clients
+        from being tied to a short-lived loop that gets closed per execution.
         """
         future: Future[SubagentResult] | None = None
         try:
@@ -485,7 +478,13 @@ class SubagentExecutor:
                 self._aexecute(task, result_holder),
                 _get_isolated_subagent_loop(),
             )
-            return future.result()
+            return future.result(timeout=self.config.timeout_seconds)
+        except FuturesTimeoutError:
+            if result_holder is not None:
+                result_holder.cancel_event.set()
+            if future is not None:
+                future.cancel()
+            raise
         except Exception:
             if future is None:
                 logger.debug(
@@ -506,9 +505,9 @@ class SubagentExecutor:
         asynchronous tools (like MCP tools) to be used within the thread pool.
 
         When called from within an already-running event loop (e.g., when the
-        parent agent is async), this method isolates the subagent execution in
-        a separate thread to avoid event loop conflicts with shared async
-        primitives like httpx clients.
+        parent agent is async), this method synchronously waits on the
+        persistent isolated loop to avoid event loop conflicts with shared
+        async primitives like httpx clients.
 
         Args:
             task: The task description for the subagent.
@@ -524,9 +523,8 @@ class SubagentExecutor:
                 loop = None
 
             if loop is not None and loop.is_running():
-                logger.debug(f"[trace={self.trace_id}] Subagent {self.config.name} detected running event loop, using isolated thread")
-                future = _isolated_loop_pool.submit(self._execute_in_isolated_loop, task, result_holder)
-                return future.result()
+                logger.debug(f"[trace={self.trace_id}] Subagent {self.config.name} detected running event loop, using isolated loop")
+                return self._execute_in_isolated_loop(task, result_holder)
 
             # Standard path: no running event loop, use asyncio.run
             return asyncio.run(self._aexecute(task, result_holder))
