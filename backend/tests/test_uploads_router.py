@@ -198,6 +198,54 @@ def test_upload_files_does_not_adjust_permissions_for_local_sandbox(tmp_path):
     make_writable.assert_not_called()
 
 
+def test_upload_files_acquires_non_local_sandbox_before_writing(tmp_path):
+    thread_uploads_dir = tmp_path / "uploads"
+    thread_uploads_dir.mkdir(parents=True)
+
+    provider = MagicMock()
+    provider.uses_thread_data_mounts = False
+    sandbox = MagicMock()
+    provider.get.return_value = sandbox
+
+    def acquire_before_writes(thread_id: str) -> str:
+        assert list(thread_uploads_dir.iterdir()) == []
+        return "aio-1"
+
+    provider.acquire.side_effect = acquire_before_writes
+
+    with (
+        patch.object(uploads, "ensure_uploads_dir", return_value=thread_uploads_dir),
+        patch.object(uploads, "get_sandbox_provider", return_value=provider),
+    ):
+        file = UploadFile(filename="notes.txt", file=BytesIO(b"hello uploads"))
+        result = asyncio.run(uploads.upload_files("thread-aio", files=[file]))
+
+    assert result.success is True
+    provider.acquire.assert_called_once_with("thread-aio")
+    sandbox.update_file.assert_called_once_with("/mnt/user-data/uploads/notes.txt", b"hello uploads")
+
+
+def test_upload_files_fails_before_writing_when_non_local_sandbox_unavailable(tmp_path):
+    thread_uploads_dir = tmp_path / "uploads"
+    thread_uploads_dir.mkdir(parents=True)
+
+    provider = MagicMock()
+    provider.uses_thread_data_mounts = False
+    provider.acquire.side_effect = RuntimeError("sandbox unavailable")
+    file = ChunkedUpload("notes.txt", [b"hello uploads"])
+
+    with (
+        patch.object(uploads, "ensure_uploads_dir", return_value=thread_uploads_dir),
+        patch.object(uploads, "get_sandbox_provider", return_value=provider),
+    ):
+        with pytest.raises(RuntimeError, match="sandbox unavailable"):
+            asyncio.run(uploads.upload_files("thread-aio", files=[file]))
+
+    assert list(thread_uploads_dir.iterdir()) == []
+    assert file.read_calls == []
+    provider.get.assert_not_called()
+
+
 def test_upload_files_rejects_too_many_files_before_writing(tmp_path):
     thread_uploads_dir = tmp_path / "uploads"
     thread_uploads_dir.mkdir(parents=True)
@@ -285,9 +333,36 @@ def test_upload_files_does_not_sync_non_local_sandbox_when_total_size_exceeds_li
             asyncio.run(uploads.upload_files("thread-aio", files=files))
 
     assert exc_info.value.status_code == 413
-    provider.acquire.assert_not_called()
-    provider.get.assert_not_called()
+    provider.acquire.assert_called_once_with("thread-aio")
+    provider.get.assert_called_once_with("aio-1")
     sandbox.update_file.assert_not_called()
+
+
+def test_upload_files_does_not_sync_non_local_sandbox_when_conversion_fails(tmp_path):
+    thread_uploads_dir = tmp_path / "uploads"
+    thread_uploads_dir.mkdir(parents=True)
+
+    provider = MagicMock()
+    provider.uses_thread_data_mounts = False
+    provider.acquire.return_value = "aio-1"
+    sandbox = MagicMock()
+    provider.get.return_value = sandbox
+
+    with (
+        patch.object(uploads, "ensure_uploads_dir", return_value=thread_uploads_dir),
+        patch.object(uploads, "get_sandbox_provider", return_value=provider),
+        patch.object(uploads, "_auto_convert_documents_enabled", return_value=True),
+        patch.object(uploads, "convert_file_to_markdown", AsyncMock(side_effect=RuntimeError("conversion failed"))),
+    ):
+        file = UploadFile(filename="report.pdf", file=BytesIO(b"pdf-bytes"))
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(uploads.upload_files("thread-aio", files=[file]))
+
+    assert exc_info.value.status_code == 500
+    provider.acquire.assert_called_once_with("thread-aio")
+    provider.get.assert_called_once_with("aio-1")
+    sandbox.update_file.assert_not_called()
+    assert not (thread_uploads_dir / "report.pdf").exists()
 
 
 def test_make_file_sandbox_writable_adds_write_bits_for_regular_files(tmp_path):

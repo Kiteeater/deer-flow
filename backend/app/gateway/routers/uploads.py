@@ -175,6 +175,12 @@ async def upload_files(
 
     sandbox_provider = get_sandbox_provider()
     sync_to_sandbox = not _uses_thread_data_mounts(sandbox_provider)
+    sandbox = None
+    if sync_to_sandbox:
+        sandbox_id = sandbox_provider.acquire(thread_id)
+        sandbox = sandbox_provider.get(sandbox_id)
+        if sandbox is None:
+            raise HTTPException(status_code=500, detail="Failed to acquire sandbox")
     auto_convert_documents = _auto_convert_documents_enabled()
 
     for file in files:
@@ -235,15 +241,13 @@ async def upload_files(
             raise e
         except Exception as e:
             logger.error(f"Failed to upload {file.filename}: {e}")
+            _cleanup_uploaded_paths(written_paths)
             raise HTTPException(status_code=500, detail=f"Failed to upload {file.filename}: {str(e)}")
 
     if sync_to_sandbox:
-        sandbox_id = sandbox_provider.acquire(thread_id)
-        sandbox = sandbox_provider.get(sandbox_id)
-        if sandbox is not None:
-            for file_path, virtual_path in sandbox_sync_targets:
-                _make_file_sandbox_writable(file_path)
-                sandbox.update_file(virtual_path, file_path.read_bytes())
+        for file_path, virtual_path in sandbox_sync_targets:
+            _make_file_sandbox_writable(file_path)
+            sandbox.update_file(virtual_path, file_path.read_bytes())
 
     return UploadResponse(
         success=True,
