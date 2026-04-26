@@ -4,9 +4,31 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import UploadFile
+import pytest
+from fastapi import HTTPException, UploadFile
 
 from app.gateway.routers import uploads
+
+
+class ChunkedUpload:
+    def __init__(self, filename: str, chunks: list[bytes]):
+        self.filename = filename
+        self._chunks = list(chunks)
+        self.read_calls: list[int | None] = []
+
+    async def read(self, size: int | None = None) -> bytes:
+        self.read_calls.append(size)
+        if size is None:
+            raise AssertionError("upload must be read with an explicit chunk size")
+        if not self._chunks:
+            return b""
+        return self._chunks.pop(0)
+
+
+def _mounted_provider() -> MagicMock:
+    provider = MagicMock()
+    provider.uses_thread_data_mounts = True
+    return provider
 
 
 def test_upload_files_writes_thread_storage_and_skips_local_sandbox_sync(tmp_path):
@@ -176,6 +198,98 @@ def test_upload_files_does_not_adjust_permissions_for_local_sandbox(tmp_path):
     make_writable.assert_not_called()
 
 
+def test_upload_files_rejects_too_many_files_before_writing(tmp_path):
+    thread_uploads_dir = tmp_path / "uploads"
+    thread_uploads_dir.mkdir(parents=True)
+
+    with (
+        patch.object(uploads, "ensure_uploads_dir", return_value=thread_uploads_dir),
+        patch.object(uploads, "get_sandbox_provider", return_value=_mounted_provider()),
+        patch.object(uploads, "_get_upload_limits", return_value=uploads.UploadLimits(max_files=1, max_file_size=10, max_total_size=20)),
+    ):
+        files = [
+            ChunkedUpload("one.txt", [b"one"]),
+            ChunkedUpload("two.txt", [b"two"]),
+        ]
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(uploads.upload_files("thread-local", files=files))
+
+    assert exc_info.value.status_code == 413
+    assert list(thread_uploads_dir.iterdir()) == []
+    assert files[0].read_calls == []
+    assert files[1].read_calls == []
+
+
+def test_upload_files_rejects_oversized_single_file_and_removes_partial_file(tmp_path):
+    thread_uploads_dir = tmp_path / "uploads"
+    thread_uploads_dir.mkdir(parents=True)
+
+    provider = _mounted_provider()
+    file = ChunkedUpload("big.txt", [b"123456"])
+
+    with (
+        patch.object(uploads, "ensure_uploads_dir", return_value=thread_uploads_dir),
+        patch.object(uploads, "get_sandbox_provider", return_value=provider),
+        patch.object(uploads, "_get_upload_limits", return_value=uploads.UploadLimits(max_files=10, max_file_size=5, max_total_size=20)),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(uploads.upload_files("thread-local", files=[file]))
+
+    assert exc_info.value.status_code == 413
+    assert not (thread_uploads_dir / "big.txt").exists()
+    assert file.read_calls == [8192]
+    provider.acquire.assert_not_called()
+
+
+def test_upload_files_rejects_total_size_over_limit_and_cleans_request_files(tmp_path):
+    thread_uploads_dir = tmp_path / "uploads"
+    thread_uploads_dir.mkdir(parents=True)
+
+    with (
+        patch.object(uploads, "ensure_uploads_dir", return_value=thread_uploads_dir),
+        patch.object(uploads, "get_sandbox_provider", return_value=_mounted_provider()),
+        patch.object(uploads, "_get_upload_limits", return_value=uploads.UploadLimits(max_files=10, max_file_size=10, max_total_size=5)),
+    ):
+        files = [
+            ChunkedUpload("first.txt", [b"123"]),
+            ChunkedUpload("second.txt", [b"456"]),
+        ]
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(uploads.upload_files("thread-local", files=files))
+
+    assert exc_info.value.status_code == 413
+    assert not (thread_uploads_dir / "first.txt").exists()
+    assert not (thread_uploads_dir / "second.txt").exists()
+
+
+def test_upload_files_does_not_sync_non_local_sandbox_when_total_size_exceeds_limit(tmp_path):
+    thread_uploads_dir = tmp_path / "uploads"
+    thread_uploads_dir.mkdir(parents=True)
+
+    provider = MagicMock()
+    provider.uses_thread_data_mounts = False
+    provider.acquire.return_value = "aio-1"
+    sandbox = MagicMock()
+    provider.get.return_value = sandbox
+
+    with (
+        patch.object(uploads, "ensure_uploads_dir", return_value=thread_uploads_dir),
+        patch.object(uploads, "get_sandbox_provider", return_value=provider),
+        patch.object(uploads, "_get_upload_limits", return_value=uploads.UploadLimits(max_files=10, max_file_size=10, max_total_size=5)),
+    ):
+        files = [
+            ChunkedUpload("first.txt", [b"123"]),
+            ChunkedUpload("second.txt", [b"456"]),
+        ]
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(uploads.upload_files("thread-aio", files=files))
+
+    assert exc_info.value.status_code == 413
+    provider.acquire.assert_not_called()
+    provider.get.assert_not_called()
+    sandbox.update_file.assert_not_called()
+
+
 def test_make_file_sandbox_writable_adds_write_bits_for_regular_files(tmp_path):
     file_path = tmp_path / "report.pdf"
     file_path.write_bytes(b"pdf-bytes")
@@ -284,3 +398,55 @@ def test_auto_convert_documents_enabled_accepts_boolean_and_string_truthy_values
         assert uploads._auto_convert_documents_enabled() is True
     with patch.object(uploads, "get_app_config", return_value=string_false_cfg):
         assert uploads._auto_convert_documents_enabled() is False
+
+
+def test_upload_limits_endpoint_reads_uploads_config():
+    cfg = MagicMock()
+    cfg.uploads = {
+        "max_files": 15,
+        "max_file_size": "1048576",
+        "max_total_size": 2097152,
+    }
+
+    with patch.object(uploads, "get_app_config", return_value=cfg):
+        result = asyncio.run(uploads.get_upload_limits("thread-local"))
+
+    assert result.max_files == 15
+    assert result.max_file_size == 1048576
+    assert result.max_total_size == 2097152
+
+
+def test_upload_limits_accept_legacy_config_keys():
+    cfg = MagicMock()
+    cfg.uploads = {
+        "max_file_count": 7,
+        "max_single_file_size": 123,
+        "max_total_size": 456,
+    }
+
+    with patch.object(uploads, "get_app_config", return_value=cfg):
+        limits = uploads._get_upload_limits()
+
+    assert limits == uploads.UploadLimits(max_files=7, max_file_size=123, max_total_size=456)
+
+
+def test_upload_files_uses_configured_file_count_limit(tmp_path):
+    thread_uploads_dir = tmp_path / "uploads"
+    thread_uploads_dir.mkdir(parents=True)
+
+    cfg = MagicMock()
+    cfg.uploads = {"max_files": 1}
+
+    with (
+        patch.object(uploads, "ensure_uploads_dir", return_value=thread_uploads_dir),
+        patch.object(uploads, "get_sandbox_provider", return_value=_mounted_provider()),
+        patch.object(uploads, "get_app_config", return_value=cfg),
+    ):
+        files = [
+            ChunkedUpload("one.txt", [b"one"]),
+            ChunkedUpload("two.txt", [b"two"]),
+        ]
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(uploads.upload_files("thread-local", files=files))
+
+    assert exc_info.value.status_code == 413
