@@ -1022,6 +1022,65 @@ class TestCooperativeCancellation:
         assert result.error == "Cancelled by user"
         assert result.completed_at is not None
 
+    def test_late_completion_after_timeout_does_not_overwrite_timed_out(self, executor_module, classes, msg):
+        """Late completion from the execution worker must not overwrite TIMED_OUT."""
+        SubagentExecutor = classes["SubagentExecutor"]
+        SubagentStatus = classes["SubagentStatus"]
+
+        short_config = classes["SubagentConfig"](
+            name="test-agent",
+            description="Test agent",
+            system_prompt="You are a test agent.",
+            max_turns=10,
+            timeout_seconds=0.05,
+        )
+
+        first_chunk_seen = threading.Event()
+        finish_stream = threading.Event()
+        execution_done = threading.Event()
+
+        async def mock_astream(*args, **kwargs):
+            yield {"messages": [msg.human("Task"), msg.ai("late completion", "msg-late")]}
+            first_chunk_seen.set()
+            finish_stream.wait(timeout=5)
+
+        mock_agent = MagicMock()
+        mock_agent.astream = mock_astream
+
+        executor = SubagentExecutor(
+            config=short_config,
+            tools=[],
+            thread_id="test-thread",
+            trace_id="test-trace",
+        )
+        original_execute = executor.execute
+
+        def tracked_execute(task, result_holder=None):
+            try:
+                return original_execute(task, result_holder)
+            finally:
+                execution_done.set()
+
+        with patch.object(executor, "_create_agent", return_value=mock_agent), patch.object(executor, "execute", tracked_execute):
+            task_id = executor.execute_async("Task")
+            assert first_chunk_seen.wait(timeout=3), "stream did not yield initial chunk"
+
+            result = executor_module._background_tasks[task_id]
+            assert result.cancel_event.wait(timeout=3), "timeout handler did not request cancellation"
+            assert result.status.value == SubagentStatus.TIMED_OUT.value
+            timed_out_error = result.error
+            timed_out_completed_at = result.completed_at
+
+            finish_stream.set()
+            assert execution_done.wait(timeout=3), "execution worker did not finish"
+
+        result = executor_module._background_tasks.get(task_id)
+        assert result is not None
+        assert result.status.value == SubagentStatus.TIMED_OUT.value
+        assert result.result is None
+        assert result.error == timed_out_error
+        assert result.completed_at == timed_out_completed_at
+
     def test_cleanup_removes_cancelled_task(self, executor_module, classes):
         """Test that cleanup removes a CANCELLED task (terminal state)."""
         SubagentResult = classes["SubagentResult"]
