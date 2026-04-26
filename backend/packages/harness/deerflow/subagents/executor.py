@@ -134,6 +134,7 @@ def _shutdown_isolated_subagent_loop() -> None:
                 loop.is_running(),
             )
 
+
 atexit.register(_shutdown_isolated_subagent_loop)
 
 
