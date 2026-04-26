@@ -1,18 +1,22 @@
-"""Unit tests for checkpointer config and singleton factory."""
+"""Unit tests for checkpointer config, packaging metadata, and factories."""
 
 import sys
+import tomllib
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import deerflow.config.app_config as app_config_module
 from deerflow.agents.checkpointer import get_checkpointer, reset_checkpointer
+from deerflow.agents.checkpointer.provider import POSTGRES_INSTALL
 from deerflow.config.checkpointer_config import (
     CheckpointerConfig,
     get_checkpointer_config,
     load_checkpointer_config_from_dict,
     set_checkpointer_config,
 )
+from deerflow.runtime.store.provider import POSTGRES_STORE_INSTALL
 
 
 @pytest.fixture(autouse=True)
@@ -66,6 +70,26 @@ class TestCheckpointerConfig:
     def test_invalid_type_raises(self):
         with pytest.raises(Exception):
             load_checkpointer_config_from_dict({"type": "unknown"})
+
+
+class TestHarnessPackaging:
+    def test_pyproject_declares_postgres_extra(self):
+        pyproject_path = Path(__file__).resolve().parents[1] / "packages" / "harness" / "pyproject.toml"
+        data = tomllib.loads(pyproject_path.read_text())
+
+        optional_dependencies = data["project"]["optional-dependencies"]
+        assert "postgres" in optional_dependencies
+        assert optional_dependencies["postgres"] == [
+            "langgraph-checkpoint-postgres>=3.0.0",
+            "psycopg[binary]>=3.2.0",
+            "psycopg-pool>=3.2.0",
+        ]
+
+    def test_postgres_missing_dependency_messages_recommend_package_extra(self):
+        assert "deerflow-harness[postgres]" in POSTGRES_INSTALL
+        assert "deerflow-harness[postgres]" in POSTGRES_STORE_INSTALL
+        assert "uv sync --all-packages --extra postgres" in POSTGRES_INSTALL
+        assert "uv sync --all-packages --extra postgres" in POSTGRES_STORE_INSTALL
 
 
 # ---------------------------------------------------------------------------
