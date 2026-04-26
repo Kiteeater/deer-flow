@@ -115,45 +115,33 @@ class AppConfig(BaseModel):
 
         config_data = cls.resolve_env_variables(config_data)
 
-        # Load title config if present
-        if "title" in config_data:
-            load_title_config_from_dict(config_data["title"])
-
-        # Load summarization config if present
-        if "summarization" in config_data:
-            load_summarization_config_from_dict(config_data["summarization"])
-
-        # Load memory config if present
-        if "memory" in config_data:
-            load_memory_config_from_dict(config_data["memory"])
+        # Always refresh singleton-backed config sections so removed sections
+        # reset to defaults on hot reload instead of preserving stale state.
+        load_title_config_from_dict(config_data.get("title") or {})
+        load_summarization_config_from_dict(config_data.get("summarization") or {})
+        load_memory_config_from_dict(config_data.get("memory") or {})
 
         # Always refresh agents API config so removed config sections reset
         # singleton-backed state to its default/disabled values on reload.
         load_agents_api_config_from_dict(config_data.get("agents_api") or {})
 
-        # Load subagents config if present
-        if "subagents" in config_data:
-            load_subagents_config_from_dict(config_data["subagents"])
-
-        # Load tool_search config if present
-        if "tool_search" in config_data:
-            load_tool_search_config_from_dict(config_data["tool_search"])
-
-        # Load guardrails config if present
-        if "guardrails" in config_data:
-            load_guardrails_config_from_dict(config_data["guardrails"])
+        load_subagents_config_from_dict(config_data.get("subagents") or {})
+        load_tool_search_config_from_dict(config_data.get("tool_search") or {})
+        load_guardrails_config_from_dict(config_data.get("guardrails") or {})
 
         # Load circuit_breaker config if present
         if "circuit_breaker" in config_data:
             config_data["circuit_breaker"] = config_data["circuit_breaker"]
 
-        # Load checkpointer config if present
-        if "checkpointer" in config_data:
-            load_checkpointer_config_from_dict(config_data["checkpointer"])
+        load_checkpointer_config_from_dict(config_data.get("checkpointer"))
+        # These runtime singletons derive their backend from checkpointer config.
+        # Keep imports local to avoid cycles: both providers import get_app_config.
+        from deerflow.agents.checkpointer import reset_checkpointer
+        from deerflow.runtime.store import reset_store
 
-        # Load stream bridge config if present
-        if "stream_bridge" in config_data:
-            load_stream_bridge_config_from_dict(config_data["stream_bridge"])
+        reset_checkpointer()
+        reset_store()
+        load_stream_bridge_config_from_dict(config_data.get("stream_bridge"))
 
         # Always refresh ACP agent config so removed entries do not linger across reloads.
         load_acp_config_from_dict(config_data.get("acp_agents", {}))
