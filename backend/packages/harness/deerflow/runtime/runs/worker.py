@@ -21,6 +21,8 @@ import inspect
 import logging
 from typing import Any, Literal
 
+from langgraph.checkpoint.base import empty_checkpoint
+
 from deerflow.runtime.serialization import serialize
 from deerflow.runtime.stream_bridge import StreamBridge
 
@@ -350,8 +352,6 @@ async def _rollback_to_pre_run_checkpoint(
 
 
 def _new_checkpoint_marker() -> dict[str, str]:
-    from langgraph.checkpoint.base import empty_checkpoint
-
     marker = empty_checkpoint()
     return {"id": marker["id"], "ts": marker["ts"]}
 

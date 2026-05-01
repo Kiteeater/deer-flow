@@ -14,7 +14,7 @@ class FakeCheckpointer:
         self.aput_writes = AsyncMock()
 
 
-def _make_checkpoint(checkpoint_id: str, messages: list[str], version: str):
+def _make_checkpoint(checkpoint_id: str, messages: list[str], version: int):
     checkpoint = empty_checkpoint()
     checkpoint["id"] = checkpoint_id
     checkpoint["channel_values"] = {"messages": messages}
@@ -53,6 +53,8 @@ async def test_rollback_restores_snapshot_without_deleting_thread():
     restore_config, restored_checkpoint, restored_metadata, new_versions = checkpointer.aput.await_args.args
     assert restore_config == {"configurable": {"thread_id": "thread-1", "checkpoint_ns": ""}}
     assert restored_checkpoint["id"] != "ckpt-1"
+    assert "channel_versions" in restored_checkpoint
+    assert "channel_values" in restored_checkpoint
     assert restored_checkpoint["channel_versions"] == {"messages": 3}
     assert restored_checkpoint["channel_values"] == {"messages": ["before"]}
     assert restored_metadata == {"source": "input"}
@@ -75,10 +77,10 @@ async def test_rollback_restores_snapshot_without_deleting_thread():
 async def test_rollback_restored_checkpoint_becomes_latest_with_real_checkpointer():
     checkpointer = InMemorySaver()
     thread_config = {"configurable": {"thread_id": "thread-1", "checkpoint_ns": ""}}
-    before_checkpoint = _make_checkpoint("0001", ["before"], "1")
-    before_config = checkpointer.put(thread_config, before_checkpoint, {"step": 1}, {"messages": "1"})
-    after_checkpoint = _make_checkpoint("0002", ["after"], "2")
-    after_config = checkpointer.put(before_config, after_checkpoint, {"step": 2}, {"messages": "2"})
+    before_checkpoint = _make_checkpoint("0001", ["before"], 1)
+    before_config = checkpointer.put(thread_config, before_checkpoint, {"step": 1}, {"messages": 1})
+    after_checkpoint = _make_checkpoint("0002", ["after"], 2)
+    after_config = checkpointer.put(before_config, after_checkpoint, {"step": 2}, {"messages": 2})
     checkpointer.put_writes(after_config, [("messages", "pending-after")], task_id="task-after")
 
     await _rollback_to_pre_run_checkpoint(
