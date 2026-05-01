@@ -120,6 +120,7 @@ async def _write_upload_file_streaming(
     file: UploadFile,
     file_path: os.PathLike[str] | str,
     *,
+    display_filename: str,
     max_single_file_size: int,
     max_total_size: int,
     total_size: int,
@@ -130,7 +131,7 @@ async def _write_upload_file_streaming(
             file_size += len(chunk)
             total_size += len(chunk)
             if file_size > max_single_file_size:
-                raise HTTPException(status_code=413, detail=f"File too large: {file.filename}")
+                raise HTTPException(status_code=413, detail=f"File too large: {display_filename}")
             if total_size > max_total_size:
                 raise HTTPException(status_code=413, detail="Total upload size too large")
             output.write(chunk)
@@ -204,6 +205,7 @@ async def upload_files(
             file_size, total_size = await _write_upload_file_streaming(
                 file,
                 file_path,
+                display_filename=safe_filename,
                 max_single_file_size=limits.max_file_size,
                 max_total_size=limits.max_total_size,
                 total_size=total_size,
