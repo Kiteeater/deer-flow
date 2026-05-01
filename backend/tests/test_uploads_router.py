@@ -220,7 +220,7 @@ def test_upload_files_acquires_non_local_sandbox_before_writing(tmp_path):
         patch.object(uploads, "get_sandbox_provider", return_value=provider),
     ):
         file = UploadFile(filename="notes.txt", file=BytesIO(b"hello uploads"))
-        result = asyncio.run(uploads.upload_files("thread-aio", files=[file]))
+        result = asyncio.run(call_unwrapped(uploads.upload_files, "thread-aio", request=MagicMock(), files=[file], config=SimpleNamespace()))
 
     assert result.success is True
     provider.acquire.assert_called_once_with("thread-aio")
@@ -241,7 +241,7 @@ def test_upload_files_fails_before_writing_when_non_local_sandbox_unavailable(tm
         patch.object(uploads, "get_sandbox_provider", return_value=provider),
     ):
         with pytest.raises(RuntimeError, match="sandbox unavailable"):
-            asyncio.run(uploads.upload_files("thread-aio", files=[file]))
+            asyncio.run(call_unwrapped(uploads.upload_files, "thread-aio", request=MagicMock(), files=[file], config=SimpleNamespace()))
 
     assert list(thread_uploads_dir.iterdir()) == []
     assert file.read_calls == []
@@ -262,7 +262,7 @@ def test_upload_files_rejects_too_many_files_before_writing(tmp_path):
             ChunkedUpload("two.txt", [b"two"]),
         ]
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(uploads.upload_files("thread-local", files=files))
+            asyncio.run(call_unwrapped(uploads.upload_files, "thread-local", request=MagicMock(), files=files, config=SimpleNamespace()))
 
     assert exc_info.value.status_code == 413
     assert list(thread_uploads_dir.iterdir()) == []
@@ -283,7 +283,7 @@ def test_upload_files_rejects_oversized_single_file_and_removes_partial_file(tmp
         patch.object(uploads, "_get_upload_limits", return_value=uploads.UploadLimits(max_files=10, max_file_size=5, max_total_size=20)),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(uploads.upload_files("thread-local", files=[file]))
+            asyncio.run(call_unwrapped(uploads.upload_files, "thread-local", request=MagicMock(), files=[file], config=SimpleNamespace()))
 
     assert exc_info.value.status_code == 413
     assert not (thread_uploads_dir / "big.txt").exists()
@@ -305,7 +305,7 @@ def test_upload_files_rejects_total_size_over_limit_and_cleans_request_files(tmp
             ChunkedUpload("second.txt", [b"456"]),
         ]
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(uploads.upload_files("thread-local", files=files))
+            asyncio.run(call_unwrapped(uploads.upload_files, "thread-local", request=MagicMock(), files=files, config=SimpleNamespace()))
 
     assert exc_info.value.status_code == 413
     assert not (thread_uploads_dir / "first.txt").exists()
@@ -332,7 +332,7 @@ def test_upload_files_does_not_sync_non_local_sandbox_when_total_size_exceeds_li
             ChunkedUpload("second.txt", [b"456"]),
         ]
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(uploads.upload_files("thread-aio", files=files))
+            asyncio.run(call_unwrapped(uploads.upload_files, "thread-aio", request=MagicMock(), files=files, config=SimpleNamespace()))
 
     assert exc_info.value.status_code == 413
     provider.acquire.assert_called_once_with("thread-aio")
@@ -358,7 +358,7 @@ def test_upload_files_does_not_sync_non_local_sandbox_when_conversion_fails(tmp_
     ):
         file = UploadFile(filename="report.pdf", file=BytesIO(b"pdf-bytes"))
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(uploads.upload_files("thread-aio", files=[file]))
+            asyncio.run(call_unwrapped(uploads.upload_files, "thread-aio", request=MagicMock(), files=[file], config=SimpleNamespace()))
 
     assert exc_info.value.status_code == 500
     provider.acquire.assert_called_once_with("thread-aio")
@@ -485,7 +485,7 @@ def test_upload_limits_endpoint_reads_uploads_config():
         "max_total_size": 2097152,
     }
 
-    result = asyncio.run(uploads.get_upload_limits("thread-local", config=cfg))
+    result = asyncio.run(call_unwrapped(uploads.get_upload_limits, "thread-local", request=MagicMock(), config=cfg))
 
     assert result.max_files == 15
     assert result.max_file_size == 1048576
