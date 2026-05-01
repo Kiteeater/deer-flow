@@ -4,7 +4,7 @@ import pytest
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.memory import InMemorySaver
 
-from deerflow.runtime.runs.worker import _rollback_to_pre_run_checkpoint
+from deerflow.runtime.runs.worker import _agent_factory_supports_app_config, _build_runtime_context, _rollback_to_pre_run_checkpoint
 
 
 class FakeCheckpointer:
@@ -257,3 +257,57 @@ async def test_rollback_propagates_aput_writes_failure():
     # aput succeeded, aput_writes was called but failed
     checkpointer.aput.assert_awaited_once()
     checkpointer.aput_writes.assert_awaited_once()
+
+
+def test_agent_factory_supports_app_config_detects_supported_signature():
+    def factory(*, config, app_config=None):
+        return (config, app_config)
+
+    assert _agent_factory_supports_app_config(factory) is True
+
+
+def test_build_runtime_context_defaults_to_thread_and_run_id():
+    ctx = _build_runtime_context("thread-1", "run-1", None)
+    assert ctx == {"thread_id": "thread-1", "run_id": "run-1"}
+
+
+def test_build_runtime_context_merges_caller_context():
+    """Regression for issue #2677: keys from ``config['context']`` (e.g. ``agent_name``)
+    must be merged into the Runtime's context so that ``ToolRuntime.context`` — which
+    is what ``setup_agent`` reads — can see them."""
+    caller_context = {"agent_name": "my-agent", "is_bootstrap": True, "model_name": "gpt-4"}
+
+    ctx = _build_runtime_context("thread-1", "run-1", caller_context)
+
+    assert ctx["thread_id"] == "thread-1"
+    assert ctx["run_id"] == "run-1"
+    assert ctx["agent_name"] == "my-agent"
+    assert ctx["is_bootstrap"] is True
+    assert ctx["model_name"] == "gpt-4"
+
+
+def test_build_runtime_context_caller_cannot_override_thread_id_or_run_id():
+    """A malicious or buggy caller must not be able to overwrite the worker-assigned
+    ``thread_id`` / ``run_id`` by stuffing them into ``config['context']``."""
+    caller_context = {"thread_id": "spoofed", "run_id": "spoofed", "agent_name": "ok"}
+
+    ctx = _build_runtime_context("real-thread", "real-run", caller_context)
+
+    assert ctx["thread_id"] == "real-thread"
+    assert ctx["run_id"] == "real-run"
+    assert ctx["agent_name"] == "ok"
+
+
+def test_build_runtime_context_ignores_non_dict_caller_context():
+    ctx = _build_runtime_context("thread-1", "run-1", "not-a-dict")
+    assert ctx == {"thread_id": "thread-1", "run_id": "run-1"}
+
+
+def test_agent_factory_supports_app_config_returns_false_when_signature_lookup_fails(monkeypatch):
+    class BrokenCallable:
+        def __call__(self, **kwargs):
+            return kwargs
+
+    monkeypatch.setattr("deerflow.runtime.runs.worker.inspect.signature", lambda _obj: (_ for _ in ()).throw(ValueError("boom")))
+
+    assert _agent_factory_supports_app_config(BrokenCallable()) is False
