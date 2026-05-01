@@ -91,7 +91,6 @@ class SubagentResult:
             if self.status.is_terminal:
                 return False
 
-            self.status = status
             if result is not None:
                 self.result = result
             if error is not None:
@@ -99,6 +98,7 @@ class SubagentResult:
             if ai_messages is not None:
                 self.ai_messages = ai_messages
             self.completed_at = completed_at or datetime.now()
+            self.status = status
             return True
 
 

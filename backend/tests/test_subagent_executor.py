@@ -620,6 +620,15 @@ class TestAsyncToolSupport:
 class TestThreadSafety:
     """Test thread safety of executor operations."""
 
+    @pytest.fixture
+    def executor_module(self, _setup_executor_classes):
+        """Import the executor module with real classes."""
+        import importlib
+
+        from deerflow.subagents import executor
+
+        return importlib.reload(executor)
+
     def test_multiple_executors_in_parallel(self, classes, base_config, msg):
         """Test multiple executors running in parallel via thread pool."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -664,6 +673,53 @@ class TestThreadSafety:
         for result in results:
             assert result.status == SubagentStatus.COMPLETED
             assert "Result" in result.result
+
+    def test_terminal_status_is_published_after_payload_fields(self, executor_module, monkeypatch):
+        """Readers must not observe terminal status before terminal payload is complete."""
+        SubagentResult = executor_module.SubagentResult
+        SubagentStatus = executor_module.SubagentStatus
+
+        now_entered = threading.Event()
+        release_now = threading.Event()
+        completed_at = datetime(2026, 5, 1, 12, 0, 0)
+        writer_errors: list[BaseException] = []
+
+        class BlockingDateTime:
+            @staticmethod
+            def now():
+                now_entered.set()
+                release_now.wait(timeout=5)
+                return completed_at
+
+        monkeypatch.setattr(executor_module, "datetime", BlockingDateTime)
+
+        result = SubagentResult(
+            task_id="test-terminal-publication-order",
+            trace_id="test-trace",
+            status=SubagentStatus.RUNNING,
+        )
+
+        def set_terminal():
+            try:
+                assert result.try_set_terminal(SubagentStatus.COMPLETED, result="done")
+            except BaseException as exc:
+                writer_errors.append(exc)
+
+        writer = threading.Thread(target=set_terminal)
+        writer.start()
+
+        assert now_entered.wait(timeout=3), "try_set_terminal did not reach completed_at assignment"
+        assert result.completed_at is None
+        assert result.status == SubagentStatus.RUNNING
+
+        release_now.set()
+        writer.join(timeout=3)
+
+        assert not writer.is_alive(), "try_set_terminal did not finish"
+        assert writer_errors == []
+        assert result.completed_at == completed_at
+        assert result.status == SubagentStatus.COMPLETED
+        assert result.result == "done"
 
 
 # -----------------------------------------------------------------------------
