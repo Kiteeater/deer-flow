@@ -24,8 +24,8 @@ def _make_checkpoint(checkpoint_id: str, messages: list[str], version: int):
     checkpoint["channel_values"] = {"messages": messages}
     checkpoint["channel_versions"] = {"messages": version}
     return checkpoint
-  
-  
+
+
 def test_build_runtime_context_includes_app_config_when_present():
     app_config = object()
 
