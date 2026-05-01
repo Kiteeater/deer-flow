@@ -82,11 +82,11 @@ def _get_uploads_config_value(app_config: AppConfig, key: str, default: object) 
     return getattr(uploads_cfg, key, default)
 
 
-def _get_upload_limit(key: str, default: int, *, legacy_key: str | None = None) -> int:
+def _get_upload_limit(app_config: AppConfig, key: str, default: int, *, legacy_key: str | None = None) -> int:
     try:
-        value = _get_uploads_config_value(key, None)
+        value = _get_uploads_config_value(app_config, key, None)
         if value is None and legacy_key is not None:
-            value = _get_uploads_config_value(legacy_key, None)
+            value = _get_uploads_config_value(app_config, legacy_key, None)
         if value is None:
             value = default
         limit = int(value)
@@ -98,11 +98,11 @@ def _get_upload_limit(key: str, default: int, *, legacy_key: str | None = None) 
         return default
 
 
-def _get_upload_limits() -> UploadLimits:
+def _get_upload_limits(app_config: AppConfig) -> UploadLimits:
     return UploadLimits(
-        max_files=_get_upload_limit("max_files", DEFAULT_MAX_FILES, legacy_key="max_file_count"),
-        max_file_size=_get_upload_limit("max_file_size", DEFAULT_MAX_FILE_SIZE, legacy_key="max_single_file_size"),
-        max_total_size=_get_upload_limit("max_total_size", DEFAULT_MAX_TOTAL_SIZE),
+        max_files=_get_upload_limit(app_config, "max_files", DEFAULT_MAX_FILES, legacy_key="max_file_count"),
+        max_file_size=_get_upload_limit(app_config, "max_file_size", DEFAULT_MAX_FILE_SIZE, legacy_key="max_single_file_size"),
+        max_total_size=_get_upload_limit(app_config, "max_total_size", DEFAULT_MAX_TOTAL_SIZE),
     )
 
 
@@ -164,7 +164,7 @@ async def upload_files(
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
-    limits = _get_upload_limits()
+    limits = _get_upload_limits(config)
     if len(files) > limits.max_files:
         raise HTTPException(status_code=413, detail=f"Too many files: maximum is {limits.max_files}")
 
@@ -262,9 +262,12 @@ async def upload_files(
 
 
 @router.get("/limits", response_model=UploadLimits)
-async def get_upload_limits(thread_id: str) -> UploadLimits:
+async def get_upload_limits(
+    thread_id: str,
+    config: AppConfig = Depends(get_config),
+) -> UploadLimits:
     """Return upload limits used by the gateway for this thread."""
-    return _get_upload_limits()
+    return _get_upload_limits(config)
 
 
 @router.get("/list", response_model=dict)

@@ -471,14 +471,10 @@ def test_auto_convert_documents_enabled_accepts_boolean_and_string_truthy_values
     string_false_cfg = MagicMock()
     string_false_cfg.uploads = MagicMock(auto_convert_documents="false")
 
-    with patch.object(uploads, "get_app_config", return_value=false_cfg):
-        assert uploads._auto_convert_documents_enabled() is False
-    with patch.object(uploads, "get_app_config", return_value=true_cfg):
-        assert uploads._auto_convert_documents_enabled() is True
-    with patch.object(uploads, "get_app_config", return_value=string_true_cfg):
-        assert uploads._auto_convert_documents_enabled() is True
-    with patch.object(uploads, "get_app_config", return_value=string_false_cfg):
-        assert uploads._auto_convert_documents_enabled() is False
+    assert uploads._auto_convert_documents_enabled(false_cfg) is False
+    assert uploads._auto_convert_documents_enabled(true_cfg) is True
+    assert uploads._auto_convert_documents_enabled(string_true_cfg) is True
+    assert uploads._auto_convert_documents_enabled(string_false_cfg) is False
 
 
 def test_upload_limits_endpoint_reads_uploads_config():
@@ -489,8 +485,7 @@ def test_upload_limits_endpoint_reads_uploads_config():
         "max_total_size": 2097152,
     }
 
-    with patch.object(uploads, "get_app_config", return_value=cfg):
-        result = asyncio.run(uploads.get_upload_limits("thread-local"))
+    result = asyncio.run(uploads.get_upload_limits("thread-local", config=cfg))
 
     assert result.max_files == 15
     assert result.max_file_size == 1048576
@@ -505,8 +500,7 @@ def test_upload_limits_accept_legacy_config_keys():
         "max_total_size": 456,
     }
 
-    with patch.object(uploads, "get_app_config", return_value=cfg):
-        limits = uploads._get_upload_limits()
+    limits = uploads._get_upload_limits(cfg)
 
     assert limits == uploads.UploadLimits(max_files=7, max_file_size=123, max_total_size=456)
 
@@ -521,13 +515,12 @@ def test_upload_files_uses_configured_file_count_limit(tmp_path):
     with (
         patch.object(uploads, "ensure_uploads_dir", return_value=thread_uploads_dir),
         patch.object(uploads, "get_sandbox_provider", return_value=_mounted_provider()),
-        patch.object(uploads, "get_app_config", return_value=cfg),
     ):
         files = [
             ChunkedUpload("one.txt", [b"one"]),
             ChunkedUpload("two.txt", [b"two"]),
         ]
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(uploads.upload_files("thread-local", files=files))
+            asyncio.run(call_unwrapped(uploads.upload_files, "thread-local", request=MagicMock(), files=files, config=cfg))
 
     assert exc_info.value.status_code == 413
