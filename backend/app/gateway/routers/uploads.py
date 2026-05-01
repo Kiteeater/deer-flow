@@ -264,8 +264,10 @@ async def upload_files(
 
 
 @router.get("/limits", response_model=UploadLimits)
+@require_permission("threads", "read", owner_check=True)
 async def get_upload_limits(
     thread_id: str,
+    request: Request,
     config: AppConfig = Depends(get_config),
 ) -> UploadLimits:
     """Return upload limits used by the gateway for this thread."""
