@@ -6,7 +6,6 @@ from pathlib import Path
 
 import yaml
 
-from deerflow.agents.checkpointer import get_checkpointer, reset_checkpointer
 from deerflow.config.agents_api_config import get_agents_api_config
 from deerflow.config.app_config import AppConfig, get_app_config, reset_app_config
 from deerflow.config.checkpointer_config import get_checkpointer_config
@@ -17,8 +16,8 @@ from deerflow.config.subagents_config import get_subagents_app_config
 from deerflow.config.summarization_config import get_summarization_config
 from deerflow.config.title_config import get_title_config
 from deerflow.config.tool_search_config import get_tool_search_config
+from deerflow.runtime.checkpointer import get_checkpointer, reset_checkpointer
 from deerflow.runtime.store import get_store, reset_store
-
 
 
 def _write_config(path: Path, *, model_name: str, supports_thinking: bool) -> None:

@@ -147,7 +147,7 @@ class AppConfig(BaseModel):
         load_checkpointer_config_from_dict(config_data.get("checkpointer"))
         # These runtime singletons derive their backend from checkpointer config.
         # Keep imports local to avoid cycles: both providers import get_app_config.
-        from deerflow.agents.checkpointer import reset_checkpointer
+        from deerflow.runtime.checkpointer import reset_checkpointer
         from deerflow.runtime.store import reset_store
 
         reset_checkpointer()
