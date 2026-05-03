@@ -71,6 +71,14 @@ class TestCheckpointerConfig:
         with pytest.raises(Exception):
             load_checkpointer_config_from_dict({"type": "unknown"})
 
+    def test_connection_string_description_matches_runtime_defaults(self):
+        description = CheckpointerConfig.model_fields["connection_string"].description
+
+        assert description is not None
+        assert "Optional for sqlite" in description
+        assert "defaults to 'store.db'" in description
+        assert "Required for postgres" in description
+
 
 class TestHarnessPackaging:
     def test_pyproject_declares_postgres_extra(self):
@@ -85,6 +93,13 @@ class TestHarnessPackaging:
             "psycopg[binary]>=3.3.3",
             "psycopg-pool>=3.3.0",
         ]
+
+    def test_workspace_pyproject_forwards_postgres_extra_to_harness(self):
+        pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        data = tomllib.loads(pyproject_path.read_text())
+
+        optional_dependencies = data["project"]["optional-dependencies"]
+        assert optional_dependencies["postgres"] == ["deerflow-harness[postgres]"]
 
     def test_postgres_missing_dependency_messages_recommend_package_extra(self):
         assert "deerflow-harness[postgres]" in POSTGRES_INSTALL
